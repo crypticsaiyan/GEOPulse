@@ -1,249 +1,732 @@
 /**
- * GEOPulse Dashboard — Main Entry Point
- *
- * Orchestrates all dashboard components:
- * - FleetMap: Google Maps with vehicle markers
- * - Sportscaster: Live audio commentary
- * - Ticker: Event feed with slide-in animations
- * - Anomaly: FleetDNA anomaly panel
- * - Detail Drawer: Vehicle/driver detail panel
+ * GEOPulse Dashboard — Unified JavaScript
+ * 
+ * Handles: Leaflet map, live data polling, sportscaster,
+ * event ticker, anomaly panel, fleet rankings, detail drawer.
+ * 
+ * All data comes from the FastAPI backend at /api/*
  */
 
-const API_BASE = window.GEOPULSE_API || 'http://localhost:8000';
+const API = '';  // Same origin — served by FastAPI
 
-// Global state
+// === GLOBAL STATE ===
 const state = {
-    vehicles: [],
-    events: [],
-    anomalies: [],
-    selectedVehicle: null,
-    eventVersion: null,
-    updateInterval: null,
+  vehicles: [],
+  events: [],
+  anomalies: [],
+  rankings: [],
+  faults: [],
+  selectedId: null,
+  eventVersion: null,
+  map: null,
+  markers: {},
+  faultCount: 0,
+  audioMuted: false,
 };
 
-// === Initialization ===
+// === INITIALIZATION ===
+document.addEventListener('DOMContentLoaded', async () => {
+  startClock();
+  initMap();
+  await loadAllData();
+  startLiveUpdates();
+});
 
-async function initDashboard() {
-    console.log('🎙️ GEOPulse Dashboard initializing...');
-
-    // Load initial data
-    await Promise.all([
-        refreshPositions(),
-        refreshEvents(),
-        refreshAnomalies(),
-    ]);
-
-    // Update header stats
-    updateFleetStats();
-
-    // Initialize components
-    initMap();
-    initTicker();
-    initAnomalyPanel();
-
-    // Start live updates
-    state.updateInterval = setInterval(async () => {
-        await refreshPositions();
-        await refreshEvents();
-        updateFleetStats();
-    }, 15000); // Every 15 seconds
-
-    // Anomaly refresh every 60s
-    setInterval(refreshAnomalies, 60000);
-
-    console.log('✅ Dashboard ready');
+// === CLOCK ===
+function startClock() {
+  const el = document.getElementById('live-clock');
+  if (!el) return;
+  const tick = () => {
+    const now = new Date();
+    el.textContent = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  };
+  tick();
+  setInterval(tick, 1000);
 }
 
-// === Data Fetching ===
+// === MAP (Leaflet — no API key) ===
+function initMap() {
+  state.map = L.map('map', {
+    center: [43.65, -79.38],  // Toronto area (Geotab HQ)
+    zoom: 10,
+    zoomControl: true,
+    attributionControl: false,
+  });
 
-async function refreshPositions() {
-    try {
-        const res = await fetch(`${API_BASE}/api/live-positions`);
-        const data = await res.json();
-        state.vehicles = data.vehicles || [];
-        if (typeof updateMapMarkers === 'function') {
-            updateMapMarkers(state.vehicles);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 18,
+  }).addTo(state.map);
+
+  // Re-center after data loads
+  setTimeout(() => state.map.invalidateSize(), 200);
+}
+
+function updateMap(vehicles) {
+  if (!state.map) return;
+  const activeIds = new Set();
+
+  vehicles.forEach(v => {
+    if (!v.latitude || !v.longitude) return;
+    activeIds.add(v.device_id);
+    const latlng = [v.latitude, v.longitude];
+    const score = v.deviation_score || 0;
+    const color = score > 70 ? '#F85149' : score > 40 ? '#D29922' : '#3FB950';
+    const isDriving = v.is_driving;
+
+    if (state.markers[v.device_id]) {
+      // Update position smoothly
+      state.markers[v.device_id].setLatLng(latlng);
+      const iconEl = state.markers[v.device_id].getElement();
+      if (iconEl) {
+        const inner = iconEl.querySelector('.marker-inner');
+        if (inner) {
+          inner.style.background = color;
+          inner.className = `marker-inner ${isDriving ? 'driving' : ''}`;
         }
-    } catch (e) {
-        console.warn('Position refresh failed:', e);
+      }
+    } else {
+      // Create marker
+      const icon = L.divIcon({
+        className: 'vehicle-marker',
+        html: `<div class="marker-inner ${isDriving ? 'driving' : ''}" style="background:${color};"></div>`,
+        iconSize: [18, 18],
+        iconAnchor: [9, 9],
+      });
+
+      const marker = L.marker(latlng, { icon }).addTo(state.map);
+      
+      // Tooltip
+      marker.bindTooltip(`
+        <strong>${v.device_name}</strong><br>
+        ${v.speed > 0 ? `Speed: ${Math.round(v.speed)} km/h` : 'Stopped'}<br>
+        Deviation: <span style="color:${color};">${score}/100</span>
+      `, { className: 'marker-tooltip', direction: 'top', offset: [0, -12] });
+
+      // Click
+      marker.on('click', () => openDrawer(v.device_id));
+
+      state.markers[v.device_id] = marker;
     }
+  });
+
+  // Remove old markers
+  Object.keys(state.markers).forEach(id => {
+    if (!activeIds.has(id)) {
+      state.map.removeLayer(state.markers[id]);
+      delete state.markers[id];
+    }
+  });
 }
 
-async function refreshEvents() {
-    try {
-        const url = state.eventVersion
-            ? `${API_BASE}/api/live-events?from_version=${state.eventVersion}`
-            : `${API_BASE}/api/live-events`;
-        const res = await fetch(url);
-        const data = await res.json();
-
-        if (data.events && data.events.length > 0) {
-            // Prepend new events
-            state.events = [...data.events, ...state.events].slice(0, 50);
-            if (typeof addTickerItems === 'function') {
-                addTickerItems(data.events);
-            }
-        }
-        if (data.next_version) {
-            state.eventVersion = data.next_version;
-        }
-    } catch (e) {
-        console.warn('Event refresh failed:', e);
-    }
+function fitFleet() {
+  if (!state.map || Object.keys(state.markers).length === 0) return;
+  const group = L.featureGroup(Object.values(state.markers));
+  state.map.fitBounds(group.getBounds().pad(0.1));
 }
 
-async function refreshAnomalies() {
-    try {
-        const res = await fetch(`${API_BASE}/api/anomalies?threshold=40`);
-        const data = await res.json();
-        state.anomalies = data.anomalies || [];
-        if (typeof renderAnomalyPanel === 'function') {
-            renderAnomalyPanel(state.anomalies);
-        }
-    } catch (e) {
-        console.warn('Anomaly refresh failed:', e);
-    }
+// === DATA LOADING ===
+async function loadAllData() {
+  await Promise.all([
+    fetchPositions(),
+    fetchEvents(),
+    fetchAnomalies(),
+    fetchFaults(),
+  ]);
+  updateStats();
+  fitFleet();
+
+  // Auto-generate first commentary
+  setTimeout(requestCommentary, 2000);
 }
 
-async function fetchDriverDetail(entityId) {
-    try {
-        const res = await fetch(`${API_BASE}/api/driver/${entityId}`);
-        return await res.json();
-    } catch (e) {
-        console.warn('Driver detail failed:', e);
-        return null;
-    }
+async function fetchPositions() {
+  try {
+    const res = await fetch(`${API}/api/live-positions`);
+    const data = await res.json();
+    state.vehicles = data.vehicles || [];
+    updateMap(state.vehicles);
+    renderRankings(state.vehicles);
+  } catch (e) {
+    console.warn('Position fetch failed:', e);
+  }
 }
 
-// === UI Updates ===
-
-function updateFleetStats() {
-    const totalEl = document.getElementById('stat-total');
-    const anomalyEl = document.getElementById('stat-anomalies');
-    const eventsEl = document.getElementById('stat-events');
-
-    if (totalEl) totalEl.textContent = state.vehicles.length;
-    if (anomalyEl) anomalyEl.textContent = state.anomalies.length;
-    if (eventsEl) eventsEl.textContent = state.events.length;
+async function fetchEvents() {
+  try {
+    const url = state.eventVersion
+      ? `${API}/api/live-events?from_version=${state.eventVersion}`
+      : `${API}/api/live-events`;
+    const res = await fetch(url);
+    const data = await res.json();
+    
+    if (data.events && data.events.length > 0) {
+      state.events = [...data.events, ...state.events].slice(0, 50);
+      renderTicker(state.events);
+    }
+    if (data.next_version) state.eventVersion = data.next_version;
+  } catch (e) {
+    console.warn('Events fetch failed:', e);
+  }
 }
 
-// === Detail Drawer ===
+async function fetchAnomalies() {
+  try {
+    const res = await fetch(`${API}/api/anomalies?threshold=30`);
+    const data = await res.json();
+    state.anomalies = data.anomalies || [];
+    renderAnomalies(state.anomalies);
+  } catch (e) {
+    console.warn('Anomalies fetch failed:', e);
+  }
+}
 
-async function openDetailDrawer(vehicleId) {
-    const drawer = document.getElementById('detail-drawer');
-    if (!drawer) return;
+async function fetchFaults() {
+  try {
+    // Use the positions endpoint — faults come from a separate call
+    const res = await fetch(`${API}/health`);
+    const data = await res.json();
+    // We'll get fault count from the full fleet data
+  } catch (e) {}
+}
 
-    state.selectedVehicle = vehicleId;
-    drawer.classList.add('open');
+function startLiveUpdates() {
+  setInterval(async () => {
+    await fetchPositions();
+    await fetchEvents();
+    updateStats();
+  }, 15000);
 
-    // Show loading
-    drawer.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted);">Loading...</div>';
+  setInterval(fetchAnomalies, 60000);
+}
 
-    const detail = await fetchDriverDetail(vehicleId);
-    if (!detail) {
-        drawer.innerHTML = '<div style="padding:24px;color:var(--text-muted);">No data available.</div>';
-        return;
+// === STATS ===
+function updateStats() {
+  setText('stat-total', state.vehicles.length);
+  setText('stat-anomalies', state.anomalies.length);
+  setText('stat-events', state.events.length);
+  setText('stat-faults', state.faultCount || '—');
+}
+
+function setText(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val;
+}
+
+// === TICKER ===
+function renderTicker(events) {
+  const list = document.getElementById('ticker-list');
+  if (!list) return;
+
+  document.getElementById('event-count').textContent = events.length;
+
+  if (events.length === 0) {
+    list.innerHTML = '<div class="ticker-empty">No events yet</div>';
+    return;
+  }
+
+  list.innerHTML = events.slice(0, 20).map(e => {
+    const time = formatTime(e.active_from);
+    const color = getEventColor(e.rule_name || '');
+    const name = e.device_name || e.driver_name || 'Unknown';
+    const rule = truncate(e.rule_name || 'Event', 32);
+
+    return `<div class="ticker-item">
+      <span class="ticker-time">${time}</span>
+      <span class="ticker-dot" style="background:${color};"></span>
+      <span class="ticker-name">${name}</span>
+      <span class="ticker-rule">${rule}</span>
+    </div>`;
+  }).join('');
+}
+
+// === ANOMALIES ===
+function renderAnomalies(anomalies) {
+  const panel = document.getElementById('anomaly-panel');
+  const list = document.getElementById('anomaly-list');
+  const count = document.getElementById('anomaly-count');
+  if (!list) return;
+
+  count.textContent = anomalies.length;
+
+  if (anomalies.length > 0) {
+    panel.classList.add('has-anomalies');
+  } else {
+    panel.classList.remove('has-anomalies');
+    list.innerHTML = '<div class="ticker-empty">✅ No anomalies detected</div>';
+    return;
+  }
+
+  list.innerHTML = anomalies.slice(0, 8).map(a => {
+    const score = a.deviation_score || 0;
+    const color = score > 70 ? 'var(--red)' : score > 40 ? 'var(--yellow)' : 'var(--green)';
+    const icon = score > 70 ? '🔴' : score > 40 ? '🟡' : '🟢';
+    
+    return `<div class="anomaly-item" onclick="openDrawer('${a.entity_id}')">
+      <div class="anomaly-item-header">
+        <span class="anomaly-name">${icon} ${a.name || 'Unknown'}</span>
+        <span class="anomaly-score" style="color:${color};">${score}</span>
+      </div>
+      <div class="anomaly-meta">${a.anomaly_type || 'unknown'} · confidence ${a.confidence || 0}%</div>
+      <div class="anomaly-actions">
+        <button class="btn btn-red" onclick="event.stopPropagation();welfareCheck('${a.entity_id}','${a.name}')">⚠️ Welfare</button>
+        <button class="btn btn-outline" onclick="event.stopPropagation();openDrawer('${a.entity_id}')">Details →</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// === RANKINGS ===
+function renderRankings(vehicles) {
+  const list = document.getElementById('rankings-list');
+  if (!list) return;
+
+  // Sort by deviation (most normal first = best performers)
+  const sorted = [...vehicles]
+    .filter(v => v.device_name)
+    .sort((a, b) => (a.deviation_score || 0) - (b.deviation_score || 0));
+
+  if (sorted.length === 0) {
+    list.innerHTML = '<div class="ticker-empty">No rankings yet</div>';
+    return;
+  }
+
+  list.innerHTML = sorted.slice(0, 10).map((v, i) => {
+    const score = v.deviation_score || 0;
+    const color = score > 70 ? 'var(--red)' : score > 40 ? 'var(--yellow)' : 'var(--green)';
+    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '';
+
+    return `<div class="rank-item" onclick="openDrawer('${v.device_id}')">
+      <span class="rank-pos">${medal || '#' + (i + 1)}</span>
+      <span class="rank-name">${v.device_name}</span>
+      <div class="rank-bar-container">
+        <div class="rank-bar" style="width:${Math.min(score, 100)}%;background:${color};"></div>
+      </div>
+      <span class="rank-score" style="color:${color};">${score}</span>
+    </div>`;
+  }).join('');
+}
+
+// === SPORTSCASTER ===
+async function requestCommentary() {
+  const btn = document.getElementById('btn-refresh-commentary');
+  if (btn) btn.style.animation = 'spin 1s linear infinite';
+
+  try {
+    const recentEvents = state.events.slice(0, 8);
+    const anomalyContext = state.anomalies.length > 0
+      ? `${state.anomalies.length} anomalies detected. Top: ${state.anomalies[0]?.name} at ${state.anomalies[0]?.deviation_score}/100.`
+      : 'Fleet is operating normally.';
+
+    const res = await fetch(`${API}/api/generate-commentary`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        events: recentEvents,
+        context: `Fleet has ${state.vehicles.length} vehicles. ${anomalyContext}`,
+      }),
+    });
+    const data = await res.json();
+
+    if (data.text) {
+      showCommentary(data.text, data.provider);
     }
+  } catch (e) {
+    showCommentary('Broadcast signal lost. Reconnecting...', 'error');
+  }
 
-    const entity = detail.entity || {};
-    const score = detail.today_score || {};
-    const baseline = detail.baseline || {};
-    const weekly = detail.weekly_delta || {};
+  if (btn) btn.style.animation = '';
+}
 
-    // Build radar chart data
-    const metrics = Object.keys(baseline).slice(0, 6);
-    const radarData = metrics.map(m => {
-        const bl = baseline[m] || {};
-        const det = (score.details || {})[m] || {};
-        return {
-            label: m.replace('_', ' '),
-            baseline: bl.mean || 0,
-            today: det.today || bl.mean || 0,
-        };
+function showCommentary(text, provider) {
+  const textEl = document.getElementById('commentary-text');
+  const metaEl = document.getElementById('commentary-meta');
+  const waveform = document.getElementById('waveform');
+
+  if (textEl) {
+    textEl.style.opacity = '0';
+    setTimeout(() => {
+      textEl.textContent = `"${text}"`;
+      textEl.style.opacity = '1';
+    }, 200);
+  }
+
+  if (metaEl) {
+    const now = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    metaEl.textContent = `${now} · via ${provider || 'AI'}`;
+  }
+
+  // Play audio
+  if (!state.audioMuted) {
+    playCommentaryAudio(text, waveform);
+  }
+}
+
+// === AUDIO PLAYBACK ===
+
+let currentAudio = null;
+
+async function playCommentaryAudio(text, waveform) {
+  // Stop any currently playing audio
+  stopCurrentAudio();
+
+  if (waveform) waveform.classList.add('active');
+
+  // Try Google Cloud TTS first
+  try {
+    const res = await fetch(`${API}/api/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, voice: 'en-US-Journey-F' }),
     });
 
-    drawer.innerHTML = `
-        <div style="padding: 24px;">
-            <button onclick="closeDetailDrawer()" style="float:right;background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:20px;">✕</button>
-            <h2 style="font-size: 18px; margin: 0 0 4px;">${entity.name || 'Unknown'}</h2>
-            <p style="color: var(--text-muted); font-size: 13px;">${entity.type || 'vehicle'} · ${entity.id || ''}</p>
+    if (res.ok) {
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      currentAudio = audio;
 
-            <div style="display:flex;gap:12px;margin:20px 0;">
-                <div class="card" style="flex:1;text-align:center;padding:12px;">
-                    <div style="font-size:28px;font-weight:bold;color:${score.deviation_score > 70 ? 'var(--red)' : score.deviation_score > 40 ? 'var(--yellow)' : 'var(--green)'}">
-                        ${score.deviation_score || 0}
-                    </div>
-                    <div style="font-size:11px;color:var(--text-muted);">DEVIATION</div>
-                </div>
-                <div class="card" style="flex:1;text-align:center;padding:12px;">
-                    <div style="font-size:28px;font-weight:bold;">${weekly.total_trips || 0}</div>
-                    <div style="font-size:11px;color:var(--text-muted);">TRIPS (7D)</div>
-                </div>
-            </div>
+      audio.onended = () => {
+        if (waveform) waveform.classList.remove('active');
+        URL.revokeObjectURL(url);
+        currentAudio = null;
+      };
 
-            <h3 style="font-size:13px;color:var(--text-muted);text-transform:uppercase;margin:16px 0 8px;">Metrics vs Baseline</h3>
-            <div id="detail-metrics">${buildMetricBars(score.details || {}, baseline)}</div>
+      audio.onerror = () => {
+        // Fall back to Web Speech API
+        console.warn('TTS audio playback failed, trying Web Speech API');
+        speakWithBrowser(text, waveform);
+      };
 
-            <div style="margin-top:24px;display:flex;gap:8px;">
-                <button class="btn btn-red" onclick="welfareCheck('${entity.id}', '${entity.name}')">⚠️ Welfare Check</button>
-                <button class="btn btn-yellow" onclick="coachingFlag('${entity.id}')">📋 Coaching Flag</button>
-                <button class="btn btn-outline" onclick="closeDetailDrawer()">Watch & Wait</button>
-            </div>
+      await audio.play();
+      return;
+    }
+  } catch (e) {
+    console.warn('TTS endpoint failed:', e);
+  }
+
+  // Fallback: Web Speech API (free, works everywhere)
+  speakWithBrowser(text, waveform);
+}
+
+function speakWithBrowser(text, waveform) {
+  if (!('speechSynthesis' in window)) {
+    // No speech available — just animate waveform briefly
+    if (waveform) {
+      waveform.classList.add('active');
+      setTimeout(() => waveform.classList.remove('active'), 5000);
+    }
+    return;
+  }
+
+  // Cancel any ongoing speech
+  speechSynthesis.cancel();
+
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.rate = 1.05;
+  utterance.pitch = 0.9;
+  utterance.volume = 1.0;
+
+  // Try to pick a good voice
+  const voices = speechSynthesis.getVoices();
+  const preferred = voices.find(v => v.name.includes('Google') && v.lang.startsWith('en')) ||
+                    voices.find(v => v.lang.startsWith('en-US')) ||
+                    voices.find(v => v.lang.startsWith('en'));
+  if (preferred) utterance.voice = preferred;
+
+  utterance.onstart = () => {
+    if (waveform) waveform.classList.add('active');
+  };
+
+  utterance.onend = () => {
+    if (waveform) waveform.classList.remove('active');
+  };
+
+  speechSynthesis.speak(utterance);
+}
+
+function stopCurrentAudio() {
+  if (currentAudio) {
+    currentAudio.pause();
+    currentAudio = null;
+  }
+  if ('speechSynthesis' in window) {
+    speechSynthesis.cancel();
+  }
+}
+
+// === DETAIL DRAWER ===
+async function openDrawer(entityId) {
+  const drawer = document.getElementById('detail-drawer');
+  const overlay = document.getElementById('drawer-overlay');
+  const content = document.getElementById('drawer-content');
+  if (!drawer || !content) return;
+
+  state.selectedId = entityId;
+  drawer.classList.add('open');
+  overlay.classList.add('active');
+
+  content.innerHTML = `<div style="text-align:center;padding:60px 0;color:var(--text-muted);">
+    <div style="font-size:32px;margin-bottom:12px;animation:spin 1s linear infinite;">⟳</div>
+    Loading vehicle DNA...
+  </div>`;
+
+  try {
+    const res = await fetch(`${API}/api/driver/${entityId}`);
+    const data = await res.json();
+    renderDrawerContent(content, data);
+  } catch (e) {
+    content.innerHTML = `<div style="padding:24px;color:var(--text-muted);">Failed to load data.</div>`;
+  }
+}
+
+function closeDrawer() {
+  document.getElementById('detail-drawer')?.classList.remove('open');
+  document.getElementById('drawer-overlay')?.classList.remove('active');
+  state.selectedId = null;
+}
+
+function renderDrawerContent(container, data) {
+  const entity = data.entity || {};
+  const score = data.today_score || {};
+  const baseline = data.baseline || {};
+  const weekly = data.weekly_delta || {};
+  const deviation = score.deviation_score || 0;
+  const devColor = deviation > 70 ? 'var(--red)' : deviation > 40 ? 'var(--yellow)' : 'var(--green)';
+
+  // Build metric rows
+  const details = score.details || {};
+  let metricsHTML = '';
+  for (const [metric, d] of Object.entries(details)) {
+    const z = Math.abs(d.z_score || 0);
+    const mColor = z > 2 ? 'var(--red)' : z > 1 ? 'var(--yellow)' : 'var(--green)';
+    const label = metric.replace(/_/g, ' ');
+    metricsHTML += `
+      <div class="metric-row">
+        <span class="metric-label">${label}</span>
+        <div class="metric-bar-track">
+          <div class="metric-bar-fill" style="width:${Math.min(z * 30, 100)}%;background:${mColor};"></div>
         </div>
-    `;
+        <span class="metric-zscore" style="color:${mColor};">z=${(d.z_score || 0).toFixed(1)}</span>
+      </div>`;
+  }
+
+  if (!metricsHTML) {
+    metricsHTML = '<div style="color:var(--text-muted);font-size:13px;padding:8px 0;">No activity data for today.</div>';
+  }
+
+  // Weekly comparison
+  const weekComp = weekly.week_vs_baseline || {};
+  let weekHTML = '';
+  for (const [metric, comp] of Object.entries(weekComp)) {
+    const delta = comp.delta_pct || 0;
+    const color = Math.abs(delta) < 10 ? 'var(--green)' : delta > 0 ? 'var(--red)' : 'var(--yellow)';
+    weekHTML += `
+      <div class="metric-row">
+        <span class="metric-label">${metric.replace(/_/g, ' ')}</span>
+        <span class="metric-zscore" style="color:${color};">${delta > 0 ? '+' : ''}${delta.toFixed(1)}%</span>
+      </div>`;
+  }
+
+  container.innerHTML = `
+    <div class="drawer-header">
+      <div>
+        <div class="drawer-entity-name">${entity.name || 'Unknown'}</div>
+        <div class="drawer-entity-meta">${entity.type || 'vehicle'} · ${entity.id || ''}</div>
+      </div>
+      <button class="drawer-close" onclick="closeDrawer()">✕</button>
+    </div>
+
+    <div class="drawer-score-cards">
+      <div class="score-card">
+        <div class="score-card-value" style="color:${devColor};">${deviation}</div>
+        <div class="score-card-label">Deviation Score</div>
+      </div>
+      <div class="score-card">
+        <div class="score-card-value">${weekly.total_trips || 0}</div>
+        <div class="score-card-label">Trips (7 days)</div>
+      </div>
+      <div class="score-card">
+        <div class="score-card-value">${weekly.days_active || 0}</div>
+        <div class="score-card-label">Days Active</div>
+      </div>
+      <div class="score-card">
+        <div class="score-card-value">${score.confidence || 0}%</div>
+        <div class="score-card-label">Confidence</div>
+      </div>
+    </div>
+
+    ${Object.keys(baseline).length > 0 ? `
+    <div class="drawer-section-title">Baseline Profile (90 days)</div>
+    <div class="radar-container">
+      <canvas id="radar-chart" width="280" height="280"></canvas>
+    </div>` : ''}
+
+    <div class="drawer-section-title">Today vs Baseline</div>
+    ${metricsHTML}
+
+    ${weekHTML ? `
+    <div class="drawer-section-title">This Week vs Normal</div>
+    ${weekHTML}` : ''}
+
+    ${weekly.positive_highlights?.length ? `
+    <div class="drawer-section-title">✅ Highlights</div>
+    <div style="font-size:13px;color:var(--green);">${weekly.positive_highlights.join('<br>')}</div>` : ''}
+
+    ${weekly.improvement_areas?.length ? `
+    <div class="drawer-section-title">⚠️ Areas to Watch</div>
+    <div style="font-size:13px;color:var(--yellow);">${weekly.improvement_areas.join('<br>')}</div>` : ''}
+
+    <div class="drawer-actions">
+      <button class="btn btn-red" onclick="welfareCheck('${entity.id}','${entity.name}')">⚠️ Welfare Check</button>
+      <button class="btn btn-yellow" onclick="showToast('📋 Coaching flag queued','success')">📋 Coaching Flag</button>
+      <button class="btn btn-green" onclick="showToast('👁️ Added to watch list','success')">👁️ Watch</button>
+      <button class="btn btn-outline" onclick="closeDrawer()">Close</button>
+    </div>
+  `;
+
+  // Render radar chart if we have baseline
+  if (Object.keys(baseline).length > 0) {
+    setTimeout(() => renderRadar(baseline, details), 100);
+  }
 }
 
-function closeDetailDrawer() {
-    const drawer = document.getElementById('detail-drawer');
-    if (drawer) drawer.classList.remove('open');
-    state.selectedVehicle = null;
+function renderRadar(baseline, todayDetails) {
+  const canvas = document.getElementById('radar-chart');
+  if (!canvas) return;
+
+  const labels = Object.keys(baseline).slice(0, 6).map(m => m.replace(/_/g, ' '));
+  const baselineData = Object.values(baseline).slice(0, 6).map(b => b.mean || 0);
+  
+  // Normalize to 0-100 scale for visual comparison
+  const maxVals = baselineData.map((v, i) => {
+    const key = Object.keys(baseline)[i];
+    return Math.max(v, (todayDetails[key]?.today || v), baseline[key]?.p95 || v);
+  });
+  
+  const normalizedBaseline = baselineData.map((v, i) => (v / (maxVals[i] || 1)) * 100);
+  const normalizedToday = Object.keys(baseline).slice(0, 6).map((key, i) => {
+    const todayVal = todayDetails[key]?.today || baselineData[i];
+    return (todayVal / (maxVals[i] || 1)) * 100;
+  });
+
+  new Chart(canvas, {
+    type: 'radar',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Baseline',
+          data: normalizedBaseline,
+          borderColor: 'rgba(56, 139, 253, 0.8)',
+          backgroundColor: 'rgba(56, 139, 253, 0.1)',
+          pointBackgroundColor: '#388BFD',
+          borderWidth: 2,
+          pointRadius: 3,
+        },
+        {
+          label: 'Today',
+          data: normalizedToday,
+          borderColor: 'rgba(248, 81, 73, 0.8)',
+          backgroundColor: 'rgba(248, 81, 73, 0.1)',
+          pointBackgroundColor: '#F85149',
+          borderWidth: 2,
+          pointRadius: 3,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: {
+          display: true,
+          position: 'bottom',
+          labels: { color: '#7D8590', font: { size: 11, family: 'Inter' } },
+        },
+      },
+      scales: {
+        r: {
+          angleLines: { color: 'rgba(48, 54, 61, 0.4)' },
+          grid: { color: 'rgba(48, 54, 61, 0.3)' },
+          pointLabels: { color: '#C9D1D9', font: { size: 10, family: 'Inter' } },
+          ticks: { display: false },
+          suggestedMin: 0,
+          suggestedMax: 100,
+        },
+      },
+    },
+  });
 }
 
-function buildMetricBars(details, baseline) {
-    let html = '';
-    for (const [metric, data] of Object.entries(details)) {
-        const z = Math.abs(data.z_score || 0);
-        const color = z > 2 ? 'var(--red)' : z > 1 ? 'var(--yellow)' : 'var(--green)';
-        const label = metric.replace(/_/g, ' ');
-        html += `
-            <div style="margin:6px 0;">
-                <div style="display:flex;justify-content:space-between;font-size:12px;">
-                    <span>${label}</span>
-                    <span style="color:${color}">z=${(data.z_score || 0).toFixed(1)}</span>
-                </div>
-                <div style="background:var(--border);height:6px;border-radius:3px;margin-top:3px;">
-                    <div style="background:${color};width:${Math.min(z * 30, 100)}%;height:6px;border-radius:3px;"></div>
-                </div>
-            </div>`;
-    }
-    return html || '<p style="color:var(--text-muted);font-size:13px;">No data for today.</p>';
-}
-
-// === Write-Back Actions ===
-
+// === WRITE-BACK ===
 async function welfareCheck(entityId, entityName) {
-    try {
-        const res = await fetch(`${API_BASE}/api/write-back/group`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                name: `Welfare Check — ${entityName}`,
-                vehicle_ids: [entityId],
-                reason: 'Flagged via GEOPulse dashboard',
-            }),
-        });
-        const data = await res.json();
-        if (data.success) {
-            alert(`✅ Welfare Check group created for ${entityName}`);
-        }
-    } catch (e) {
-        console.error('Welfare check failed:', e);
+  try {
+    const res = await fetch(`${API}/api/write-back/group`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: `Welfare Check — ${entityName}`,
+        vehicle_ids: [entityId],
+        reason: 'Flagged via GEOPulse Dashboard',
+      }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast(`✅ Welfare Check group created for ${entityName}`, 'success');
+    } else {
+      showToast(`❌ Failed to create group`, 'error');
     }
+  } catch (e) {
+    showToast(`❌ Write-back failed: ${e.message}`, 'error');
+  }
 }
 
-async function coachingFlag(entityId) {
-    alert(`📋 Coaching flag queued for ${entityId}. Rule will be created in Geotab.`);
+// === TOAST ===
+function showToast(message, type = 'success') {
+  const container = document.getElementById('toast-container');
+  if (!container) return;
+
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.innerHTML = `<span>${message}</span>`;
+  container.appendChild(toast);
+
+  setTimeout(() => {
+    toast.style.animation = 'toast-out 0.3s ease forwards';
+    setTimeout(() => toast.remove(), 300);
+  }, 4000);
 }
 
-// === Start ===
-document.addEventListener('DOMContentLoaded', initDashboard);
+// === HELPERS ===
+function formatTime(dateStr) {
+  if (!dateStr) return '--:--';
+  try {
+    const d = new Date(dateStr);
+    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+  } catch { return '--:--'; }
+}
+
+function getEventColor(ruleName) {
+  const l = (ruleName || '').toLowerCase();
+  if (l.includes('harsh') || l.includes('brake') || l.includes('collision')) return '#F85149';
+  if (l.includes('speed') || l.includes('exceed')) return '#D29922';
+  if (l.includes('idle') || l.includes('stop')) return '#388BFD';
+  return '#3FB950';
+}
+
+function truncate(str, len) {
+  return str && str.length > len ? str.substring(0, len) + '…' : str || '';
+}
+
+// === MUTE TOGGLE ===
+function toggleMute() {
+  state.audioMuted = !state.audioMuted;
+  const btn = document.getElementById('btn-mute');
+  if (btn) btn.textContent = state.audioMuted ? '🔇' : '🔊';
+  if (state.audioMuted) stopCurrentAudio();
+  showToast(state.audioMuted ? '🔇 Audio muted' : '🔊 Audio enabled', 'success');
+}
+
+// Spin animation for refresh button
+const style = document.createElement('style');
+style.textContent = '@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }';
+document.head.appendChild(style);

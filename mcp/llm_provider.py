@@ -96,25 +96,33 @@ class LLMProvider:
         return result
 
     def _generate_gemini(self, prompt, system_prompt, temperature, max_tokens):
-        """Generate via Google Gemini API."""
+        """Generate via Google Gemini API with retry for quota errors."""
         model = self._init_gemini()
 
         full_prompt = prompt
         if system_prompt:
             full_prompt = f"{system_prompt}\n\n---\n\n{prompt}"
 
-        try:
-            response = model.generate_content(
-                full_prompt,
-                generation_config={
-                    "temperature": temperature,
-                    "max_output_tokens": max_tokens,
-                }
-            )
-            return response.text
-        except Exception as e:
-            logger.error(f"Gemini API error: {e}")
-            raise
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            try:
+                response = model.generate_content(
+                    full_prompt,
+                    generation_config={
+                        "temperature": temperature,
+                        "max_output_tokens": max_tokens,
+                    }
+                )
+                return response.text
+            except Exception as e:
+                error_str = str(e)
+                if "429" in error_str and attempt < max_retries:
+                    wait = 15 * (attempt + 1)
+                    logger.warning(f"Gemini quota hit, retry {attempt+1}/{max_retries} in {wait}s")
+                    time.sleep(wait)
+                    continue
+                logger.error(f"Gemini API error: {e}")
+                raise
 
     def _generate_ollama(self, prompt, system_prompt, temperature, max_tokens):
         """Generate via local Ollama server."""

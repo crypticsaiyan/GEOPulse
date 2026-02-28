@@ -3,88 +3,154 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>GEOPulse</title>
-  <!-- Google Fonts: Inter -->
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <!-- Chart.js for radar + sparklines -->
+  <title>GEOPulse — Fleet Intelligence</title>
+  <meta name="description" content="GEOPulse: One Fleet Brain, Every Stakeholder Gets Their Own Signal.">
+
+  <!-- Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <!-- Leaflet (no API key needed) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- Chart.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-  <!-- Google Maps API (key injected at runtime) -->
-  <link rel="stylesheet" href="css/dashboard.css">
+
+  <link rel="stylesheet" href="/css/dashboard.css">
 </head>
 <body>
   <!-- TOP BAR -->
   <header class="topbar">
-    <div class="brand">🎙️ GEOPulse</div>
-    <div class="broadcast-status">
-      <span class="live-dot"></span> LIVE BROADCAST
+    <div class="topbar-left">
+      <div class="brand">
+        <span class="brand-icon">📡</span>
+        <span class="brand-text">GEO<span class="brand-accent">Pulse</span></span>
+      </div>
+      <div class="broadcast-badge" id="broadcast-badge">
+        <span class="live-dot"></span>
+        LIVE
+      </div>
     </div>
-    <div class="fleet-summary" id="fleet-summary">
-      <!-- 3 numbers: Total Vehicles | Anomalies | Events Today -->
+    <div class="topbar-stats">
+      <div class="stat-chip">
+        <span class="stat-icon">🚐</span>
+        <span class="stat-value" id="stat-total">—</span>
+        <span class="stat-label">Vehicles</span>
+      </div>
+      <div class="stat-chip stat-anomaly">
+        <span class="stat-icon">⚠️</span>
+        <span class="stat-value" id="stat-anomalies">—</span>
+        <span class="stat-label">Anomalies</span>
+      </div>
+      <div class="stat-chip">
+        <span class="stat-icon">📡</span>
+        <span class="stat-value" id="stat-events">—</span>
+        <span class="stat-label">Events</span>
+      </div>
+      <div class="stat-chip">
+        <span class="stat-icon">🔧</span>
+        <span class="stat-value" id="stat-faults">—</span>
+        <span class="stat-label">Faults</span>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <span class="clock" id="live-clock"></span>
     </div>
   </header>
 
   <!-- MAIN GRID -->
-  <main class="grid">
+  <main class="main-grid">
 
-    <!-- LEFT: GOOGLE MAP (60% width) -->
-    <section class="map-panel">
+    <!-- LEFT: MAP -->
+    <section class="map-section">
       <div id="map"></div>
-      <div class="map-controls">
-        <!-- Toggle buttons: Heatmap | Trip Trails | Geofences | Anomaly Only -->
+      <div class="map-overlay-top">
+        <div class="map-legend glass-card">
+          <span class="legend-item"><span class="legend-dot" style="background:#3FB950;"></span> Normal</span>
+          <span class="legend-item"><span class="legend-dot" style="background:#D29922;"></span> Moderate</span>
+          <span class="legend-item"><span class="legend-dot" style="background:#F85149;"></span> Anomalous</span>
+        </div>
+      </div>
+      <div class="map-overlay-bottom">
+        <button class="map-btn glass-card" onclick="fitFleet()" title="Fit all vehicles">⊡ Fit Fleet</button>
       </div>
     </section>
 
-    <!-- RIGHT: BROADCAST PANEL (40% width) -->
-    <section class="broadcast-panel">
+    <!-- RIGHT: PANELS -->
+    <section class="panels-section">
 
-      <!-- SPORTSCASTER AUDIO PLAYER -->
-      <div class="card sportscaster-card">
-        <div class="sc-header">🎙️ LIVE BROADCAST</div>
+      <!-- SPORTSCASTER -->
+      <div class="panel glass-card sportscaster-panel">
+        <div class="panel-header">
+          <span class="panel-icon">🎙️</span>
+          <span class="panel-title">LIVE BROADCAST</span>
+          <div class="broadcast-controls">
+            <button class="ctrl-btn" id="btn-mute" onclick="toggleMute()" title="Toggle audio">🔊</button>
+            <button class="ctrl-btn" id="btn-refresh-commentary" onclick="requestCommentary()" title="Generate new commentary">↻</button>
+          </div>
+        </div>
         <div class="waveform" id="waveform">
-          <!-- Animated waveform bars -->
+          <div class="waveform-bar"></div><div class="waveform-bar"></div>
+          <div class="waveform-bar"></div><div class="waveform-bar"></div>
+          <div class="waveform-bar"></div><div class="waveform-bar"></div>
+          <div class="waveform-bar"></div><div class="waveform-bar"></div>
+          <div class="waveform-bar"></div><div class="waveform-bar"></div>
+          <div class="waveform-bar"></div><div class="waveform-bar"></div>
         </div>
-        <div class="sc-text" id="current-commentary">
-          Waiting for broadcast...
+        <div class="commentary-text" id="commentary-text">
+          Initializing broadcast system...
         </div>
-        <audio id="sc-audio" autoplay></audio>
+        <div class="commentary-meta" id="commentary-meta"></div>
       </div>
 
       <!-- EVENT TICKER -->
-      <div class="card ticker-card">
-        <div class="ticker-header">📡 LIVE EVENTS</div>
-        <div class="ticker-list" id="event-ticker">
-          <!-- Events slide in from top, auto-scroll -->
+      <div class="panel glass-card ticker-panel">
+        <div class="panel-header">
+          <span class="panel-icon">📡</span>
+          <span class="panel-title">LIVE EVENTS</span>
+          <span class="event-count" id="event-count">0</span>
+        </div>
+        <div class="ticker-list" id="ticker-list">
+          <div class="ticker-empty">Waiting for events...</div>
         </div>
       </div>
 
       <!-- ANOMALY PANEL -->
-      <div class="card anomaly-card" id="anomaly-panel">
-        <div class="anomaly-header">⚠️ ANOMALIES (FleetDNA)</div>
-        <div id="anomaly-list">
-          <!-- Per-anomaly: driver name, deviation score, type, action buttons -->
+      <div class="panel glass-card anomaly-panel" id="anomaly-panel">
+        <div class="panel-header">
+          <span class="panel-icon">⚡</span>
+          <span class="panel-title">FleetDNA ANOMALIES</span>
+          <span class="anomaly-count" id="anomaly-count">0</span>
+        </div>
+        <div class="anomaly-list" id="anomaly-list">
+          <div class="ticker-empty">Scanning fleet behavior...</div>
+        </div>
+      </div>
+
+      <!-- FLEET RANKINGS -->
+      <div class="panel glass-card rankings-panel">
+        <div class="panel-header">
+          <span class="panel-icon">🏆</span>
+          <span class="panel-title">FLEET RANKINGS</span>
+        </div>
+        <div class="rankings-list" id="rankings-list">
+          <div class="ticker-empty">Building rankings...</div>
         </div>
       </div>
 
     </section>
-
   </main>
 
-  <!-- DETAIL DRAWER (slides in from right when vehicle clicked) -->
+  <!-- DETAIL DRAWER -->
+  <div class="drawer-overlay" id="drawer-overlay" onclick="closeDrawer()"></div>
   <aside class="detail-drawer" id="detail-drawer">
-    <button class="drawer-close" id="drawer-close">✕</button>
-    <div id="drawer-content">
-      <!-- Vehicle/Driver details -->
-      <!-- Radar chart: Today vs Their Normal -->
-      <!-- 7-day sparkline -->
-      <!-- Fault timeline -->
-      <!-- Action buttons: Welfare Check, Coaching Flag, Watch & Wait -->
-    </div>
+    <div class="drawer-content" id="drawer-content"></div>
   </aside>
 
-  <script src="js/map.js"></script>
-  <script src="js/sportscaster.js"></script>
-  <script src="js/ticker.js"></script>
-  <script src="js/anomaly.js"></script>
-  <script src="js/main.js"></script>
+  <!-- TOAST NOTIFICATIONS -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <script src="/js/main.js"></script>
 </body>
 </html>

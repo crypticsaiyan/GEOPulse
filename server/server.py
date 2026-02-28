@@ -18,6 +18,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 import sys
@@ -30,6 +32,10 @@ from mcp.fleetdna import FleetDNA
 from mcp.llm_provider import LLMProvider
 
 logger = logging.getLogger(__name__)
+
+# Paths
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ADDIN_DIR = os.path.join(BASE_DIR, "addin")
 
 # Shared instances
 cache = None
@@ -69,18 +75,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Serve dashboard static files
+app.mount("/css", StaticFiles(directory=os.path.join(ADDIN_DIR, "css")), name="css")
+app.mount("/js", StaticFiles(directory=os.path.join(ADDIN_DIR, "js")), name="js")
+
+
+@app.get("/")
+async def serve_dashboard():
+    """Serve the main dashboard HTML."""
+    return FileResponse(os.path.join(ADDIN_DIR, "index.html"))
+
 
 # === Request Models ===
 
 class CommentaryRequest(BaseModel):
     events: list[dict] = []
     context: str = ""
+    tone: str = "energetic but professional fleet safety sportscaster"
+
+class TTSRequest(BaseModel):
+    text: str
+    voice: str = "en-US-Neural2-D"
 
 class GroupRequest(BaseModel):
     name: str
     vehicle_ids: list[str] = []
     reason: str = ""
-
 
 # === Endpoints ===
 
@@ -162,10 +182,10 @@ async def anomalies(threshold: int = 60):
 async def generate_commentary(req: CommentaryRequest):
     """Generate sportscaster-style commentary from events."""
     system_prompt = (
-        "You are an energetic but professional fleet safety sportscaster. "
+        f"You are a {req.tone}. "
         "Rules: "
-        "- Voice: like ESPN radio, but for fleet operations. "
-        "- Celebrate good driving: 'Marcus is having an absolute clinic today'. "
+        "- Voice: match the tone perfectly. "
+        "- Celebrate good driving if tone allows: 'Marcus is having an absolute clinic today'. "
         "- Flag concerns with urgency: 'that's the third harsh brake this morning'. "
         "- Mention specific vehicle numbers and driver names. "
         "- When FleetDNA flags an anomaly, note it with the deviation percentage. "
@@ -175,18 +195,99 @@ async def generate_commentary(req: CommentaryRequest):
     )
 
     events_text = json.dumps(req.events[:10], default=str)
-    prompt = f"Generate live sportscaster commentary for these fleet events:\n{events_text}"
+    prompt = f"Generate live commentary for these fleet events:\n{events_text}"
     if req.context:
         prompt += f"\n\nAdditional context: {req.context}"
 
-    text = llm.generate_cached(
-        prompt=prompt,
-        system_prompt=system_prompt,
-        cache_key=f"commentary_{hash(events_text) % 100000}",
-        ttl_seconds=300,  # 5 min cache for commentary
-    )
+    try:
+        text = llm.generate_cached(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            cache_key=f"commentary_{hash(events_text) % 100000}",
+            ttl_seconds=300,
+        )
+        return {"text": text, "provider": llm.get_info()["provider"]}
+    except Exception as e:
+        logger.warning(f"Commentary generation failed: {e}")
+        # Build contextual fallback from real event data
+        event_names = [ev.get("device_name", "Unknown") for ev in req.events[:3]]
+        event_types = [ev.get("rule_name", "event") for ev in req.events[:3]]
+        vehicle_count = len(set(ev.get("device_id", "") for ev in req.events)) if req.events else 0
 
-    return {"text": text, "provider": llm.get_info()["provider"]}
+        if event_types and event_names:
+            fallback = (
+                f"We've got action across the fleet right now — {vehicle_count} vehicles on the board. "
+                f"{event_names[0]} just triggered a {event_types[0].lower()} alert. "
+                f"{'Meanwhile, ' + event_names[1] + ' is also lighting up with ' + event_types[1].lower() + '. ' if len(event_names) > 1 else ''}"
+                f"Stay tuned, this fleet never sleeps!"
+            )
+        else:
+            fallback = (
+                "The fleet is humming along right now. All vehicles on the board, "
+                "no major flags at this moment. A calm stretch in operations — "
+                "but we'll keep our eyes on it. Stay tuned!"
+            )
+        return {"text": fallback, "provider": "fallback"}
+
+
+@app.post("/api/tts")
+async def generate_tts(req: TTSRequest):
+    """Generate TTS audio using Google Cloud Text-to-Speech."""
+    # Check cache first
+    if cache:
+        # Include voice in cache key to avoid mixing different voices
+        # for the same text
+        cache_key = f"{req.text}_{req.voice}"
+        cached_path = cache.get_tts_cache(cache_key)
+        if cached_path and os.path.exists(cached_path):
+            return FileResponse(cached_path, media_type="audio/mpeg")
+
+    try:
+        from google.cloud import texttospeech
+        import hashlib
+
+        # Instantiates a client
+        client = texttospeech.TextToSpeechClient()
+
+        # Set the text input to be synthesized
+        synthesis_input = texttospeech.SynthesisInput(text=req.text)
+
+        # Build the voice request, select the language code and the ssml
+        # voice gender ("neutral")
+        parts = req.voice.split("-")
+        lang_code = "-".join(parts[:2]) if len(parts) >= 2 else "en-US"
+        voice = texttospeech.VoiceSelectionParams(
+            language_code=lang_code,
+            name=req.voice
+        )
+
+        # Select the type of audio file you want returned
+        audio_config = texttospeech.AudioConfig(
+            audio_encoding=texttospeech.AudioEncoding.MP3
+        )
+
+        # Perform the text-to-speech request on the text input with the selected
+        # voice parameters and audio file type
+        response = client.synthesize_speech(
+            input=synthesis_input, voice=voice, audio_config=audio_config
+        )
+
+        os.makedirs(os.path.join(BASE_DIR, "audio"), exist_ok=True)
+        filename = hashlib.sha256(f"{req.text}_{req.voice}".encode()).hexdigest()[:16] + ".mp3"
+        filepath = os.path.join(BASE_DIR, "audio", filename)
+
+        with open(filepath, "wb") as out:
+            # Write the response to the output file.
+            out.write(response.audio_content)
+
+        if cache:
+            # Include voice in cache key when setting the cache as well
+            cache.set_tts_cache(f"{req.text}_{req.voice}", filepath)
+
+        return FileResponse(filepath, media_type="audio/mpeg")
+    except Exception as e:
+        logger.error(f"TTS failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/write-back/group")
