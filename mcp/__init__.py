@@ -6,4 +6,5 @@ This package contains:
 - geotab_client.py: Geotab API wrapper with data-fetching functions
 - fleetdna.py: Behavioral fingerprinting engine (FleetDNA)
 - duckdb_cache.py: Local DuckDB analytics cache
+- llm_provider.py: Unified LLM interface (Gemini + Ollama)
 """
