@@ -1,0 +1,259 @@
+/* === GEOPulse Dashboard — Dark Theme === */
+
+/* === DESIGN TOKENS === */
+:root {
+  --bg-primary:    #0D1117;
+  --bg-secondary:  #161B22;
+  --bg-card:       #1C2128;
+  --border:        #30363D;
+  --text-primary:  #E6EDF3;
+  --text-muted:    #7D8590;
+  --green:         #3FB950;
+  --yellow:        #D29922;
+  --red:           #F85149;
+  --blue:          #388BFD;
+  --font:          'Inter', -apple-system, sans-serif;
+}
+
+/* === LAYOUT === */
+* { box-sizing: border-box; }
+
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font);
+  margin: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* === TOP BAR === */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 24px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  height: 56px;
+}
+
+.brand {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+}
+
+.broadcast-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--red);
+}
+
+.fleet-summary {
+  display: flex;
+  gap: 24px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/* === MAIN GRID === */
+.grid {
+  display: grid;
+  grid-template-columns: 60fr 40fr;
+  flex: 1;
+  gap: 0;
+  overflow: hidden;
+}
+
+/* === MAP PANEL === */
+.map-panel {
+  position: relative;
+}
+
+#map {
+  width: 100%;
+  height: 100%;
+  background: var(--bg-primary);
+}
+
+.map-controls {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  display: flex;
+  gap: 8px;
+}
+
+/* === BROADCAST PANEL === */
+.broadcast-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  overflow-y: auto;
+  border-left: 1px solid var(--border);
+}
+
+/* === CARDS === */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+/* === SPORTSCASTER CARD === */
+.sc-header, .ticker-header, .anomaly-header {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+
+.sc-text {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  min-height: 60px;
+}
+
+/* === LIVE DOT === */
+.live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  background: var(--red);
+  border-radius: 50%;
+  animation: blink 1.2s infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.2; }
+}
+
+/* === ANOMALY PULSE === */
+.anomaly-active {
+  border-color: var(--red) !important;
+  animation: pulse-border 2s infinite;
+}
+
+@keyframes pulse-border {
+  0%, 100% { box-shadow: 0 0 0 0   rgba(248, 81, 73, 0.4); }
+  50%      { box-shadow: 0 0 0 8px rgba(248, 81, 73, 0); }
+}
+
+/* === EVENT TICKER === */
+.ticker-list {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.ticker-item {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  animation: slide-in 0.35s ease;
+  font-size: 13px;
+}
+
+@keyframes slide-in {
+  from { transform: translateY(-32px); opacity: 0; }
+  to   { transform: translateY(0);     opacity: 1; }
+}
+
+/* === VEHICLE STATUS COLORS === */
+.status-green  { color: var(--green); }
+.status-yellow { color: var(--yellow); }
+.status-red    { color: var(--red); }
+
+/* === DETAIL DRAWER === */
+.detail-drawer {
+  position: fixed;
+  right: -420px;
+  top: 0;
+  bottom: 0;
+  width: 420px;
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--border);
+  transition: right 0.3s ease;
+  z-index: 100;
+  overflow-y: auto;
+  padding: 24px;
+}
+
+.detail-drawer.open {
+  right: 0;
+}
+
+.drawer-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+/* === ACTION BUTTONS === */
+.btn {
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: opacity 0.2s;
+}
+
+.btn:hover     { opacity: 0.8; }
+.btn-red       { background: var(--red);    color: white; }
+.btn-yellow    { background: var(--yellow); color: #000; }
+.btn-green     { background: var(--green);  color: #000; }
+.btn-outline   {
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+}
+
+/* === WAVEFORM ANIMATION === */
+.waveform {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 32px;
+  margin-bottom: 8px;
+}
+
+.waveform-bar {
+  width: 3px;
+  background: var(--blue);
+  border-radius: 2px;
+  animation: wave 1.2s ease-in-out infinite;
+}
+
+.waveform-bar:nth-child(2) { animation-delay: 0.1s; }
+.waveform-bar:nth-child(3) { animation-delay: 0.2s; }
+.waveform-bar:nth-child(4) { animation-delay: 0.3s; }
+.waveform-bar:nth-child(5) { animation-delay: 0.4s; }
+.waveform-bar:nth-child(6) { animation-delay: 0.5s; }
+.waveform-bar:nth-child(7) { animation-delay: 0.6s; }
+.waveform-bar:nth-child(8) { animation-delay: 0.7s; }
+
+@keyframes wave {
+  0%, 100% { height: 6px; }
+  50%      { height: 28px; }
+}

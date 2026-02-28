@@ -1,0 +1,30 @@
+# GEOPulse Python Dependencies
+# Install: pip install -r requirements.txt
+
+# === Core ===
+requests>=2.31.0
+python-dotenv>=1.0.1
+mygeotab>=0.9.0
+
+# === MCP Server ===
+mcp>=1.0.0
+
+# === Analytics Cache ===
+duckdb>=1.2.0
+
+# === Scheduling ===
+APScheduler>=3.10.4
+
+# === Google Cloud ===
+google-cloud-texttospeech>=2.16.3
+google-generativeai>=0.8.0
+
+# === Web Server ===
+fastapi>=0.115.0
+uvicorn>=0.30.0
+
+# === Data Processing ===
+pandas>=2.2.0
+
+# === Utilities ===
+httpx>=0.27.0

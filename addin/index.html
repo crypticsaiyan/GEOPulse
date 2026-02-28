@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GEOPulse</title>
+  <!-- Google Fonts: Inter -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Chart.js for radar + sparklines -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <!-- Google Maps API (key injected at runtime) -->
+  <link rel="stylesheet" href="css/dashboard.css">
+</head>
+<body>
+  <!-- TOP BAR -->
+  <header class="topbar">
+    <div class="brand">🎙️ GEOPulse</div>
+    <div class="broadcast-status">
+      <span class="live-dot"></span> LIVE BROADCAST
+    </div>
+    <div class="fleet-summary" id="fleet-summary">
+      <!-- 3 numbers: Total Vehicles | Anomalies | Events Today -->
+    </div>
+  </header>
+
+  <!-- MAIN GRID -->
+  <main class="grid">
+
+    <!-- LEFT: GOOGLE MAP (60% width) -->
+    <section class="map-panel">
+      <div id="map"></div>
+      <div class="map-controls">
+        <!-- Toggle buttons: Heatmap | Trip Trails | Geofences | Anomaly Only -->
+      </div>
+    </section>
+
+    <!-- RIGHT: BROADCAST PANEL (40% width) -->
+    <section class="broadcast-panel">
+
+      <!-- SPORTSCASTER AUDIO PLAYER -->
+      <div class="card sportscaster-card">
+        <div class="sc-header">🎙️ LIVE BROADCAST</div>
+        <div class="waveform" id="waveform">
+          <!-- Animated waveform bars -->
+        </div>
+        <div class="sc-text" id="current-commentary">
+          Waiting for broadcast...
+        </div>
+        <audio id="sc-audio" autoplay></audio>
+      </div>
+
+      <!-- EVENT TICKER -->
+      <div class="card ticker-card">
+        <div class="ticker-header">📡 LIVE EVENTS</div>
+        <div class="ticker-list" id="event-ticker">
+          <!-- Events slide in from top, auto-scroll -->
+        </div>
+      </div>
+
+      <!-- ANOMALY PANEL -->
+      <div class="card anomaly-card" id="anomaly-panel">
+        <div class="anomaly-header">⚠️ ANOMALIES (FleetDNA)</div>
+        <div id="anomaly-list">
+          <!-- Per-anomaly: driver name, deviation score, type, action buttons -->
+        </div>
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- DETAIL DRAWER (slides in from right when vehicle clicked) -->
+  <aside class="detail-drawer" id="detail-drawer">
+    <button class="drawer-close" id="drawer-close">✕</button>
+    <div id="drawer-content">
+      <!-- Vehicle/Driver details -->
+      <!-- Radar chart: Today vs Their Normal -->
+      <!-- 7-day sparkline -->
+      <!-- Fault timeline -->
+      <!-- Action buttons: Welfare Check, Coaching Flag, Watch & Wait -->
+    </div>
+  </aside>
+
+  <script src="js/map.js"></script>
+  <script src="js/sportscaster.js"></script>
+  <script src="js/ticker.js"></script>
+  <script src="js/anomaly.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,46 @@
+# Environment
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
+
+# DuckDB
+*.db
+*.duckdb
+
+# Node.js
+node_modules/
+npm-debug.log*
+
+# Audio output
+audio/
+*.mp3
+*.wav
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Google Cloud credentials
+*.json
+!addin/config.json
+!server/package.json
+
+# Logs
+*.log
