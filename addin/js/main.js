@@ -20,6 +20,8 @@ const state = {
   eventVersion: null,
   map: null,
   markers: {},
+  heatLayer: null,
+  tripTrails: [],
   faultCount: 0,
   audioMuted: false,
 };
@@ -44,7 +46,7 @@ function startClock() {
   setInterval(tick, 1000);
 }
 
-// === MAP (Leaflet — no API key) ===
+// === MAP (Leaflet — dark theme, no API key) ===
 function initMap() {
   state.map = L.map('map', {
     center: [43.65, -79.38],  // Toronto area (Geotab HQ)
@@ -53,8 +55,10 @@ function initMap() {
     attributionControl: false,
   });
 
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 18,
+  // Dark CartoDB tile layer for premium dark-mode look
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    maxZoom: 19,
+    subdomains: 'abcd',
   }).addTo(state.map);
 
   // Re-center after data loads
@@ -124,6 +128,54 @@ function fitFleet() {
   state.map.fitBounds(group.getBounds().pad(0.1));
 }
 
+// === HEATMAP LAYER ===
+function updateHeatmap(events) {
+  if (!state.map || typeof L.heatLayer === 'undefined') return;
+
+  // Remove old layer
+  if (state.heatLayer) {
+    state.map.removeLayer(state.heatLayer);
+  }
+
+  // Build heat points from events with coordinates
+  const heatPoints = events
+    .filter(e => e.latitude && e.longitude)
+    .map(e => {
+      const ruleName = (e.rule_name || '').toLowerCase();
+      const intensity = ruleName.includes('harsh') || ruleName.includes('collision') ? 1.0 :
+                       ruleName.includes('speed') ? 0.7 : 0.4;
+      return [e.latitude, e.longitude, intensity];
+    });
+
+  if (heatPoints.length > 0) {
+    state.heatLayer = L.heatLayer(heatPoints, {
+      radius: 25,
+      blur: 15,
+      maxZoom: 15,
+      gradient: { 0.2: '#388BFD', 0.5: '#D29922', 0.8: '#F85149', 1.0: '#FF0000' },
+    }).addTo(state.map);
+  }
+}
+
+// === TRIP TRAILS ===
+function clearTripTrails() {
+  state.tripTrails.forEach(trail => state.map.removeLayer(trail));
+  state.tripTrails = [];
+}
+
+function addTripTrail(coordinates, color = '#388BFD') {
+  if (!state.map || !coordinates || coordinates.length < 2) return;
+  const polyline = L.polyline(coordinates, {
+    color,
+    weight: 3,
+    opacity: 0.7,
+    smoothFactor: 1,
+    dashArray: '8, 6',
+  }).addTo(state.map);
+  state.tripTrails.push(polyline);
+  return polyline;
+}
+
 // === DATA LOADING ===
 async function loadAllData() {
   await Promise.all([
@@ -162,6 +214,7 @@ async function fetchEvents() {
     if (data.events && data.events.length > 0) {
       state.events = [...data.events, ...state.events].slice(0, 50);
       renderTicker(state.events);
+      updateHeatmap(state.events);
     }
     if (data.next_version) state.eventVersion = data.next_version;
   } catch (e) {

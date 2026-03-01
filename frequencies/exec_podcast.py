@@ -21,6 +21,7 @@ from mcp.duckdb_cache import DuckDBCache
 from mcp.geotab_client import GeotabClient
 from mcp.fleetdna import FleetDNA
 from mcp.llm_provider import LLMProvider
+from mcp.google_publisher import publish_podcast_episode, publish_to_sheets
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +214,19 @@ def run_monday_podcast():
     # Generate audio
     audio_path = generate_podcast_audio(script, cache)
 
+    # Publish to Google services
+    week_num = week_data.get("week_number", datetime.now().strftime("%W"))
+    summary = script[:300] if script else "Weekly fleet intelligence update"
+    publish_result = publish_podcast_episode(
+        episode_number=week_num,
+        audio_path=audio_path,
+        script_text=script,
+        week_summary=summary,
+    )
+
+    # Also update Sheets with full week data
+    publish_to_sheets(week_data, summary)
+
     cache.close()
     return {
         "script": script,
@@ -222,6 +236,7 @@ def run_monday_podcast():
             "vehicles": week_data["total_vehicles"],
             "avg_deviation": week_data["avg_deviation_score"],
         },
+        "publish_result": publish_result,
     }
 
 

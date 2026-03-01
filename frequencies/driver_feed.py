@@ -21,6 +21,7 @@ from mcp.duckdb_cache import DuckDBCache
 from mcp.geotab_client import GeotabClient
 from mcp.fleetdna import FleetDNA
 from mcp.llm_provider import LLMProvider
+from mcp.email_sender import send_driver_email
 
 logger = logging.getLogger(__name__)
 
@@ -216,6 +217,15 @@ def run_friday_driver_feed():
                 "audio": audio_path,
                 "email_generated": True,
             })
+
+            # Send email if driver email is available
+            driver_email = entity.get("email")
+            if driver_email:
+                email_result = send_driver_email(
+                    driver_email, entity["name"], email_html, audio_path
+                )
+                results[-1]["email_sent"] = email_result.get("success", False)
+
             logger.info(f"Driver feed complete for {entity['name']}")
 
         except Exception as e:

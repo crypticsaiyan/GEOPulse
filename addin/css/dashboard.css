@@ -187,8 +187,7 @@ body {
   background: var(--bg-deep);
 }
 
-/* Leaflet dark tiles override */
-.leaflet-tile-pane { filter: brightness(0.6) invert(1) contrast(3) hue-rotate(200deg) saturate(0.3) brightness(0.7); }
+/* Leaflet dark theme controls (tiles already dark via CartoDB dark_all) */
 .leaflet-control-zoom a {
   background: var(--bg-secondary) !important;
   color: var(--text-primary) !important;

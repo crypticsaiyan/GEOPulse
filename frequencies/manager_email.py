@@ -19,6 +19,7 @@ from mcp.duckdb_cache import DuckDBCache
 from mcp.geotab_client import GeotabClient
 from mcp.fleetdna import FleetDNA
 from mcp.llm_provider import LLMProvider
+from mcp.email_sender import send_manager_brief as send_manager_email
 
 logger = logging.getLogger(__name__)
 
@@ -136,8 +137,15 @@ def run_manager_brief():
     brief = generate_manager_brief(fleet_data, llm_provider)
     email_html = generate_manager_email_html(brief, fleet_summary)
 
+    # Send email if configured
+    manager_email = os.getenv("MANAGER_EMAIL")
+    email_sent = False
+    if manager_email:
+        result = send_manager_email(manager_email, email_html)
+        email_sent = result.get("success", False)
+
     cache.close()
-    return {"brief": brief, "email_html": email_html, "summary": fleet_summary}
+    return {"brief": brief, "email_html": email_html, "summary": fleet_summary, "email_sent": email_sent}
 
 
 if __name__ == "__main__":
