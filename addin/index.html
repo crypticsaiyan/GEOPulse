@@ -28,7 +28,10 @@
     <div class="topbar-left">
       <div class="brand">
         <span class="brand-icon">📡</span>
-        <span class="brand-text">GEO<span class="brand-accent">Pulse</span></span>
+        <div>
+          <span class="brand-text">&lt;<span class="brand-accent">GEOPulse</span> /&gt;</span>
+          <div class="brand-subtitle">// fleet_intelligence_command</div>
+        </div>
       </div>
       <div class="broadcast-badge" id="broadcast-badge">
         <span class="live-dot"></span>
@@ -77,6 +80,8 @@
       </div>
       <div class="map-overlay-bottom">
         <button class="map-btn glass-card" onclick="fitFleet()" title="Fit all vehicles">⊡ Fit Fleet</button>
+        <button class="map-btn glass-card" id="btn-heatmap" onclick="toggleHeatmap()" title="Toggle heatmap">🔥 Heatmap</button>
+        <button class="map-btn glass-card" id="btn-trails" onclick="toggleTrails()" title="Toggle trails">〰️ Trails</button>
       </div>
     </section>
 
@@ -153,6 +158,33 @@
 
   <!-- TOAST NOTIFICATIONS -->
   <div class="toast-container" id="toast-container"></div>
+
+  <!-- BOTTOM STATUS BAR -->
+  <footer class="status-bar">
+    <div class="status-bar-left">
+      <div class="status-item">
+        <span class="status-dot" id="status-conn-dot"></span>
+        <span id="status-conn">Geotab Connected</span>
+      </div>
+      <span class="status-separator"></span>
+      <div class="status-item">
+        <span id="status-freshness">Data: —</span>
+      </div>
+      <span class="status-separator"></span>
+      <div class="status-item">
+        <span id="status-llm">LLM: —</span>
+      </div>
+    </div>
+    <div class="status-bar-right">
+      <div class="status-item">
+        <span id="status-vehicles">0 vehicles tracked</span>
+      </div>
+      <span class="status-separator"></span>
+      <div class="status-item">
+        <span id="status-time"></span>
+      </div>
+    </div>
+  </footer>
 
   <script src="/js/main.js"></script>
 </body>

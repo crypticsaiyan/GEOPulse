@@ -21,17 +21,24 @@ const state = {
   map: null,
   markers: {},
   heatLayer: null,
+  heatmapVisible: true,
+  trailsVisible: true,
   tripTrails: [],
+  vehicleTrails: {},
   faultCount: 0,
   audioMuted: false,
+  lastDataTime: null,
 };
 
 // === INITIALIZATION ===
 document.addEventListener('DOMContentLoaded', async () => {
   startClock();
   initMap();
+  initKeyboard();
+  initStatusBar();
   await loadAllData();
   startLiveUpdates();
+  startFreshnessTracker();
 });
 
 // === CLOCK ===
@@ -76,39 +83,58 @@ function updateMap(vehicles) {
     const score = v.deviation_score || 0;
     const color = score > 70 ? '#F85149' : score > 40 ? '#D29922' : '#3FB950';
     const isDriving = v.is_driving;
+    const isAnomaly = score > 60;
+    const bearing = v.bearing || 0;
 
     if (state.markers[v.device_id]) {
-      // Update position smoothly
+      // Smooth position update + trail
+      const oldLatLng = state.markers[v.device_id].getLatLng();
       state.markers[v.device_id].setLatLng(latlng);
+
+      // Add to vehicle trail
+      if (state.trailsVisible && isDriving) {
+        if (!state.vehicleTrails[v.device_id]) state.vehicleTrails[v.device_id] = [];
+        state.vehicleTrails[v.device_id].push(latlng);
+        if (state.vehicleTrails[v.device_id].length > 10) {
+          state.vehicleTrails[v.device_id].shift();
+        }
+      }
+
       const iconEl = state.markers[v.device_id].getElement();
       if (iconEl) {
         const inner = iconEl.querySelector('.marker-inner');
         if (inner) {
           inner.style.background = color;
-          inner.className = `marker-inner ${isDriving ? 'driving' : ''}`;
+          inner.style.color = color;
+          inner.className = `marker-inner ${isDriving ? 'driving' : ''} ${isAnomaly ? 'anomaly' : ''}`;
         }
+        // Rotate arrow based on bearing
+        const arrow = iconEl.querySelector('.marker-arrow');
+        if (arrow) arrow.style.transform = `rotate(${bearing}deg)`;
       }
     } else {
-      // Create marker
+      // Create directional arrow marker
       const icon = L.divIcon({
         className: 'vehicle-marker',
-        html: `<div class="marker-inner ${isDriving ? 'driving' : ''}" style="background:${color};"></div>`,
+        html: `<div class="marker-inner ${isDriving ? 'driving' : ''} ${isAnomaly ? 'anomaly' : ''}" style="background:${color};color:${color};">
+          <svg class="marker-arrow" width="18" height="18" viewBox="0 0 18 18" style="position:absolute;top:-3px;left:-3px;transform:rotate(${bearing}deg);opacity:${isDriving ? '0.8' : '0'};">
+            <polygon points="9,1 5,14 9,11 13,14" fill="${color}" stroke="rgba(255,255,255,0.3)" stroke-width="0.5"/>
+          </svg>
+        </div>`,
         iconSize: [18, 18],
         iconAnchor: [9, 9],
       });
 
       const marker = L.marker(latlng, { icon }).addTo(state.map);
       
-      // Tooltip
+      const speedText = v.speed > 0 ? `${Math.round(v.speed)} km/h` : 'Stopped';
       marker.bindTooltip(`
         <strong>${v.device_name}</strong><br>
-        ${v.speed > 0 ? `Speed: ${Math.round(v.speed)} km/h` : 'Stopped'}<br>
-        Deviation: <span style="color:${color};">${score}/100</span>
+        ${speedText} · Bearing: ${bearing}°<br>
+        Deviation: <span style="color:${color};font-weight:700;">${score}/100</span>
       `, { className: 'marker-tooltip', direction: 'top', offset: [0, -12] });
 
-      // Click
       marker.on('click', () => openDrawer(v.device_id));
-
       state.markers[v.device_id] = marker;
     }
   });
@@ -120,6 +146,9 @@ function updateMap(vehicles) {
       delete state.markers[id];
     }
   });
+
+  // Draw vehicle trails
+  drawVehicleTrails();
 }
 
 function fitFleet() {
@@ -258,6 +287,8 @@ function updateStats() {
   setText('stat-anomalies', state.anomalies.length);
   setText('stat-events', state.events.length);
   setText('stat-faults', state.faultCount || '—');
+  state.lastDataTime = Date.now();
+  updateStatusBar();
 }
 
 function setText(id, val) {
@@ -777,6 +808,111 @@ function toggleMute() {
   if (btn) btn.textContent = state.audioMuted ? '🔇' : '🔊';
   if (state.audioMuted) stopCurrentAudio();
   showToast(state.audioMuted ? '🔇 Audio muted' : '🔊 Audio enabled', 'success');
+}
+
+// === HEATMAP / TRAILS TOGGLES ===
+function toggleHeatmap() {
+  state.heatmapVisible = !state.heatmapVisible;
+  const btn = document.getElementById('btn-heatmap');
+  if (btn) btn.style.opacity = state.heatmapVisible ? '1' : '0.4';
+  if (state.heatLayer) {
+    if (state.heatmapVisible) {
+      state.heatLayer.addTo(state.map);
+    } else {
+      state.map.removeLayer(state.heatLayer);
+    }
+  }
+  showToast(state.heatmapVisible ? '🔥 Heatmap on' : '🔥 Heatmap off', 'success');
+}
+
+function toggleTrails() {
+  state.trailsVisible = !state.trailsVisible;
+  const btn = document.getElementById('btn-trails');
+  if (btn) btn.style.opacity = state.trailsVisible ? '1' : '0.4';
+  if (!state.trailsVisible) {
+    clearTripTrails();
+    state.vehicleTrails = {};
+  }
+  showToast(state.trailsVisible ? '〰️ Trails on' : '〰️ Trails off', 'success');
+}
+
+function drawVehicleTrails() {
+  // Clear old trail polylines
+  clearTripTrails();
+  if (!state.trailsVisible) return;
+
+  Object.entries(state.vehicleTrails).forEach(([id, points]) => {
+    if (points.length < 2) return;
+    const v = state.vehicles.find(v => v.device_id === id);
+    const score = v?.deviation_score || 0;
+    const color = score > 70 ? '#F85149' : score > 40 ? '#D29922' : '#388BFD';
+    addTripTrail(points, color);
+  });
+}
+
+// === KEYBOARD SHORTCUTS ===
+function initKeyboard() {
+  document.addEventListener('keydown', (e) => {
+    // Don't trigger when typing in inputs
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    
+    switch (e.key.toLowerCase()) {
+      case 'f': fitFleet(); break;
+      case 'm': toggleMute(); break;
+      case 'escape': closeDrawer(); break;
+      case 'h': toggleHeatmap(); break;
+      case 't': toggleTrails(); break;
+    }
+  });
+}
+
+// === STATUS BAR ===
+function initStatusBar() {
+  // Fetch LLM provider info
+  fetch(`${API}/health`).then(r => r.json()).then(data => {
+    setText('status-llm', `LLM: ${data.llm_provider || 'Gemini'}`); 
+  }).catch(() => {
+    setText('status-llm', 'LLM: —');
+  });
+}
+
+function updateStatusBar() {
+  // Vehicle count
+  setText('status-vehicles', `${state.vehicles.length} vehicles tracked`);
+  
+  // Connection status
+  const connDot = document.getElementById('status-conn-dot');
+  const connText = document.getElementById('status-conn');
+  if (connDot && connText) {
+    connDot.className = 'status-dot'; // green = connected
+    connText.textContent = 'Geotab Connected';
+  }
+
+  // Timestamp
+  const now = new Date();
+  setText('status-time', now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }));
+}
+
+function startFreshnessTracker() {
+  setInterval(() => {
+    if (!state.lastDataTime) return;
+    const age = Math.round((Date.now() - state.lastDataTime) / 1000);
+    const freshnessEl = document.getElementById('status-freshness');
+    const connDot = document.getElementById('status-conn-dot');
+    
+    if (freshnessEl) {
+      freshnessEl.textContent = `Data: ${age}s ago`;
+    }
+    if (connDot) {
+      if (age < 10) {
+        connDot.className = 'status-dot';
+      } else if (age < 30) {
+        connDot.className = 'status-dot stale';
+      } else {
+        connDot.className = 'status-dot offline';
+      }
+    }
+  }, 1000);
 }
 
 // Spin animation for refresh button
