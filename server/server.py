@@ -30,6 +30,7 @@ from mcp.duckdb_cache import DuckDBCache
 from mcp.geotab_client import GeotabClient
 from mcp.fleetdna import FleetDNA
 from mcp.llm_provider import LLMProvider
+from mcp.ace_client import AceClient
 
 logger = logging.getLogger(__name__)
 
@@ -42,18 +43,20 @@ cache = None
 geotab = None
 dna = None
 llm = None
+ace = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize on startup, cleanup on shutdown."""
-    global cache, geotab, dna, llm
+    global cache, geotab, dna, llm, ace
     cache = DuckDBCache(db_path="geopulse.db")
     cache.initialize()
     geotab = GeotabClient(db_cache=cache)
     geotab.authenticate()
     dna = FleetDNA(geotab, cache)
     llm = LLMProvider(db_cache=cache)
+    ace = AceClient(db_cache=cache)
     logger.info("GEOPulse server initialized")
     yield
     cache.close()
@@ -101,6 +104,13 @@ class GroupRequest(BaseModel):
     name: str
     vehicle_ids: list[str] = []
     reason: str = ""
+
+class AceQueryRequest(BaseModel):
+    question: str
+
+class ReportRequest(BaseModel):
+    entity_id: str
+    report_type: str = "incident"  # "incident" or "coaching"
 
 # === Endpoints ===
 
@@ -312,7 +322,156 @@ async def health():
         "status": "ok",
         "llm_provider": llm.get_info()["provider"],
         "llm_model": llm.get_info()["model"],
+        "ace_available": ace is not None,
     }
+
+
+@app.post("/api/ace-query")
+async def ace_query(req: AceQueryRequest):
+    """Query Geotab Ace AI with a natural language question."""
+    import asyncio
+    try:
+        # Run blocking Ace call in a thread pool
+        result = await asyncio.to_thread(ace.query, req.question)
+        return {
+            "answer": result.get("answer", ""),
+            "data": result.get("data", []),
+            "columns": result.get("columns", []),
+            "reasoning": result.get("reasoning", ""),
+            "source": "ace",
+        }
+    except Exception as e:
+        logger.warning(f"Ace query failed, falling back to LLM: {e}")
+        # Fallback: use local LLM with fleet context
+        try:
+            fleet_context = json.dumps({
+                "total_vehicles": len(geotab.get_all_devices()),
+                "anomalies": len(dna.rank_fleet()),
+            })
+            answer = llm.generate(
+                prompt=f"Answer this fleet management question using the context below.\n\nQuestion: {req.question}\n\nFleet context: {fleet_context}",
+                system_prompt="You are a fleet analytics AI. Answer questions concisely. "
+                              "If the data is insufficient, say so clearly.",
+            )
+            return {
+                "answer": answer,
+                "data": [],
+                "columns": [],
+                "reasoning": "",
+                "source": "local_llm",
+            }
+        except Exception as fallback_err:
+            raise HTTPException(status_code=500, detail=str(fallback_err))
+
+
+@app.post("/api/generate-report")
+async def generate_report(req: ReportRequest):
+    """Generate an AI incident or coaching report for an entity."""
+    import asyncio
+    try:
+        # Gather entity data
+        baseline = dna.build_baseline(req.entity_id)
+        today_score = dna.score_today(req.entity_id)
+        events_result = geotab.get_live_events()
+        entity_events = [
+            e for e in events_result.get("events", [])
+            if e.get("device_id") == req.entity_id or e.get("driver_id") == req.entity_id
+        ][:10]
+
+        # Build context
+        context = json.dumps({
+            "entity_id": req.entity_id,
+            "baseline": baseline,
+            "today_score": today_score,
+            "recent_events": entity_events,
+        }, default=str)
+
+        if req.report_type == "coaching":
+            system_prompt = (
+                "You are a fleet safety coach. Generate a brief coaching report "
+                "with specific, actionable recommendations. Use the driver's deviation "
+                "score and event history to personalize advice. Keep it to 3-4 paragraphs."
+            )
+        else:
+            system_prompt = (
+                "You are a fleet operations analyst. Generate a formal incident report "
+                "including: Summary, Contributing Factors, Telemetry Analysis, and "
+                "Recommended Actions. Reference specific events and deviation scores. "
+                "Keep it professional and concise (4-5 paragraphs)."
+            )
+
+        report = await asyncio.to_thread(
+            llm.generate,
+            prompt=f"Generate a {req.report_type} report for this entity:\n{context}",
+            system_prompt=system_prompt,
+        )
+        return {
+            "report": report,
+            "report_type": req.report_type,
+            "entity_id": req.entity_id,
+            "provider": llm.get_info()["provider"],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/trip-replay/{device_id}")
+async def trip_replay(device_id: str):
+    """Get GPS breadcrumbs for trip replay animation."""
+    import asyncio
+    try:
+        trips = await asyncio.to_thread(geotab.get_driver_trips, device_id, 1)
+        if not trips:
+            return {"trips": [], "points": []}
+
+        # Get GPS log records for the most recent trip
+        latest_trip = trips[0]
+        from_date = latest_trip.get("start", "")
+        to_date = latest_trip.get("stop", "")
+
+        # Fetch LogRecord breadcrumbs for this trip
+        try:
+            log_records = await asyncio.to_thread(
+                geotab._cached_call,
+                f"logrec_{device_id}_{from_date[:10]}",
+                300,
+                "Get",
+                {
+                    "typeName": "LogRecord",
+                    "search": {
+                        "deviceSearch": {"id": device_id},
+                        "fromDate": from_date,
+                        "toDate": to_date,
+                    },
+                    "resultsLimit": 500,
+                }
+            )
+        except Exception:
+            log_records = []
+
+        points = []
+        for rec in (log_records or []):
+            lat = rec.get("latitude", 0)
+            lon = rec.get("longitude", 0)
+            if lat and lon and lat != 0 and lon != 0:
+                points.append({
+                    "lat": lat,
+                    "lng": lon,
+                    "time": rec.get("dateTime", ""),
+                    "speed": rec.get("speed", 0),
+                })
+
+        return {
+            "trip": {
+                "start": from_date,
+                "stop": to_date,
+                "distance": latest_trip.get("distance", 0),
+            },
+            "points": points,
+            "total_points": len(points),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

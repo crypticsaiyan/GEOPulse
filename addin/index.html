@@ -68,8 +68,78 @@
   <!-- MAIN GRID -->
   <main class="main-grid">
 
-    <!-- LEFT: MAP -->
-    <section class="map-section">
+    <!-- LEFT SIDEBAR -->
+    <aside class="sidebar sidebar-left panels-section" id="sidebar-left">
+      <div class="sidebar-header">
+        <span class="sidebar-title">FLEET PANELS</span>
+        <button class="ctrl-btn toggle-btn" onclick="toggleSidebar('left')" title="Toggle Panels">◀</button>
+      </div>
+      <div class="sidebar-content">
+        <!-- SPORTSCASTER -->
+        <div class="panel glass-card sportscaster-panel">
+          <div class="panel-header">
+            <span class="panel-icon">🎙️</span>
+            <span class="panel-title">LIVE BROADCAST</span>
+            <div class="broadcast-controls">
+              <button class="ctrl-btn" id="btn-mute" onclick="toggleMute()" title="Toggle audio">🔊</button>
+              <button class="ctrl-btn" id="btn-refresh-commentary" onclick="requestCommentary()" title="Generate new commentary">↻</button>
+            </div>
+          </div>
+          <div class="waveform" id="waveform">
+            <div class="waveform-bar"></div><div class="waveform-bar"></div>
+            <div class="waveform-bar"></div><div class="waveform-bar"></div>
+            <div class="waveform-bar"></div><div class="waveform-bar"></div>
+            <div class="waveform-bar"></div><div class="waveform-bar"></div>
+            <div class="waveform-bar"></div><div class="waveform-bar"></div>
+            <div class="waveform-bar"></div><div class="waveform-bar"></div>
+          </div>
+          <div class="commentary-text" id="commentary-text">
+            Initializing broadcast system...
+          </div>
+          <div class="commentary-meta" id="commentary-meta"></div>
+        </div>
+
+        <!-- EVENT TICKER -->
+        <div class="panel glass-card ticker-panel">
+          <div class="panel-header">
+            <span class="panel-icon">📡</span>
+            <span class="panel-title">LIVE EVENTS</span>
+            <span class="event-count" id="event-count">0</span>
+          </div>
+          <div class="ticker-list" id="ticker-list">
+            <div class="ticker-empty">Waiting for events...</div>
+          </div>
+        </div>
+
+        <!-- ANOMALY PANEL -->
+        <div class="panel glass-card anomaly-panel">
+          <div class="panel-header">
+            <span class="panel-icon">⚠️</span>
+            <span class="panel-title">ANOMALIES</span>
+          </div>
+          <div class="anomaly-list" id="anomaly-list">
+            <div class="ticker-empty">No anomalies</div>
+          </div>
+        </div>
+
+        <!-- RANKINGS -->
+        <div class="panel glass-card rankings-panel">
+          <div class="panel-header">
+            <span class="panel-icon">🏆</span>
+            <span class="panel-title">FLEET RANKINGS</span>
+          </div>
+          <div class="rankings-list" id="rankings-list">
+            <div class="ticker-empty">Building rankings...</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- LEFT RESIZER -->
+    <div class="resizer resizer-left" id="resizer-left"></div>
+
+    <!-- CENTER: MAP -->
+    <section class="map-section" style="flex: 1;">
       <div id="map"></div>
       <div class="map-overlay-top">
         <div class="map-legend glass-card">
@@ -85,69 +155,36 @@
       </div>
     </section>
 
-    <!-- RIGHT: PANELS -->
-    <section class="panels-section">
+    <!-- RIGHT RESIZER -->
+    <div class="resizer resizer-right" id="resizer-right"></div>
 
-      <!-- SPORTSCASTER -->
-      <div class="panel glass-card sportscaster-panel">
-        <div class="panel-header">
-          <span class="panel-icon">🎙️</span>
-          <span class="panel-title">LIVE BROADCAST</span>
-          <div class="broadcast-controls">
-            <button class="ctrl-btn" id="btn-mute" onclick="toggleMute()" title="Toggle audio">🔊</button>
-            <button class="ctrl-btn" id="btn-refresh-commentary" onclick="requestCommentary()" title="Generate new commentary">↻</button>
+    <!-- RIGHT: PANELS -->
+    <aside class="sidebar sidebar-right" id="sidebar-right">
+      <div class="sidebar-header">
+        <button class="ctrl-btn toggle-btn" onclick="toggleSidebar('right')" title="Toggle Chat">▶</button>
+        <span class="sidebar-title">ACE CHAT</span>
+      </div>
+      <div class="sidebar-content">
+        <!-- ACE CHAT PANEL -->
+        <div class="panel glass-card ace-panel" style="flex: 1; border-top: none;">
+          <div class="panel-header">
+            <span class="panel-icon">🧠</span>
+            <span class="panel-title">ACE QUERY</span>
+            <span class="ace-source" id="ace-source"></span>
+          </div>
+          <div class="ace-chat-log" id="ace-chat-log" style="max-height: none; flex: 1;">
+            <div class="ace-welcome">// ask anything about your fleet</div>
+          </div>
+          <div class="ace-input-row" style="margin-bottom: 10px; margin-left: 10px; margin-right: 10px;">
+            <span class="ace-prompt">&gt;</span>
+            <input type="text" class="ace-input" id="ace-input"
+                   placeholder="e.g. Which drivers need coaching?"
+                   onkeydown="if(event.key==='Enter') sendAceQuery()">
+            <button class="ctrl-btn" onclick="sendAceQuery()" title="Send query">⏎</button>
           </div>
         </div>
-        <div class="waveform" id="waveform">
-          <div class="waveform-bar"></div><div class="waveform-bar"></div>
-          <div class="waveform-bar"></div><div class="waveform-bar"></div>
-          <div class="waveform-bar"></div><div class="waveform-bar"></div>
-          <div class="waveform-bar"></div><div class="waveform-bar"></div>
-          <div class="waveform-bar"></div><div class="waveform-bar"></div>
-          <div class="waveform-bar"></div><div class="waveform-bar"></div>
-        </div>
-        <div class="commentary-text" id="commentary-text">
-          Initializing broadcast system...
-        </div>
-        <div class="commentary-meta" id="commentary-meta"></div>
       </div>
-
-      <!-- EVENT TICKER -->
-      <div class="panel glass-card ticker-panel">
-        <div class="panel-header">
-          <span class="panel-icon">📡</span>
-          <span class="panel-title">LIVE EVENTS</span>
-          <span class="event-count" id="event-count">0</span>
-        </div>
-        <div class="ticker-list" id="ticker-list">
-          <div class="ticker-empty">Waiting for events...</div>
-        </div>
-      </div>
-
-      <!-- ANOMALY PANEL -->
-      <div class="panel glass-card anomaly-panel" id="anomaly-panel">
-        <div class="panel-header">
-          <span class="panel-icon">⚡</span>
-          <span class="panel-title">FleetDNA ANOMALIES</span>
-          <span class="anomaly-count" id="anomaly-count">0</span>
-        </div>
-        <div class="anomaly-list" id="anomaly-list">
-          <div class="ticker-empty">Scanning fleet behavior...</div>
-        </div>
-      </div>
-
-      <!-- FLEET RANKINGS -->
-      <div class="panel glass-card rankings-panel">
-        <div class="panel-header">
-          <span class="panel-icon">🏆</span>
-          <span class="panel-title">FLEET RANKINGS</span>
-        </div>
-        <div class="rankings-list" id="rankings-list">
-          <div class="ticker-empty">Building rankings...</div>
-        </div>
-      </div>
-
-    </section>
+    </aside>
   </main>
 
   <!-- DETAIL DRAWER -->

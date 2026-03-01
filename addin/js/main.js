@@ -39,6 +39,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadAllData();
   startLiveUpdates();
   startFreshnessTracker();
+  initResizers();
 });
 
 // === CLOCK ===
@@ -58,9 +59,11 @@ function initMap() {
   state.map = L.map('map', {
     center: [43.65, -79.38],  // Toronto area (Geotab HQ)
     zoom: 10,
-    zoomControl: true,
+    zoomControl: false,
     attributionControl: false,
   });
+  
+  L.control.zoom({ position: 'bottomright' }).addTo(state.map);
 
   // Dark CartoDB tile layer for premium dark-mode look
   L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
@@ -661,11 +664,13 @@ function renderDrawerContent(container, data) {
     <div style="font-size:13px;color:var(--yellow);">${weekly.improvement_areas.join('<br>')}</div>` : ''}
 
     <div class="drawer-actions">
-      <button class="btn btn-red" onclick="welfareCheck('${entity.id}','${entity.name}')">⚠️ Welfare Check</button>
-      <button class="btn btn-yellow" onclick="showToast('📋 Coaching flag queued','success')">📋 Coaching Flag</button>
-      <button class="btn btn-green" onclick="showToast('👁️ Added to watch list','success')">👁️ Watch</button>
+      <button class="btn btn-red" onclick="generateReport('${entity.id}', 'incident')">📄 Incident Report</button>
+      <button class="btn btn-yellow" onclick="generateReport('${entity.id}', 'coaching')">📋 Coaching Report</button>
+      <button class="btn btn-green" onclick="replayTrip('${entity.id}')">▶️ Trip Replay</button>
       <button class="btn btn-outline" onclick="closeDrawer()">Close</button>
     </div>
+    <div id="drawer-report-container"></div>
+    <div id="drawer-replay-container"></div>
   `;
 
   // Render radar chart if we have baseline
@@ -919,3 +924,293 @@ function startFreshnessTracker() {
 const style = document.createElement('style');
 style.textContent = '@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }';
 document.head.appendChild(style);
+
+
+// === ACE CHAT PANEL ===
+async function sendAceQuery() {
+  const inputEl = document.getElementById('ace-input');
+  const logEl = document.getElementById('ace-chat-log');
+  const sourceEl = document.getElementById('ace-source');
+  
+  if (!inputEl || !logEl || !inputEl.value.trim()) return;
+
+  const question = inputEl.value.trim();
+  inputEl.value = '';
+
+  // Add question to log
+  logEl.innerHTML += `<div class="ace-msg"><div class="ace-msg-question">${question}</div></div>`;
+  logEl.scrollTop = logEl.scrollHeight;
+
+  // Add loading indicator
+  const loadingId = 'ace-load-' + Date.now();
+  logEl.innerHTML += `<div class="ace-msg" id="${loadingId}"><div class="ace-msg-loading">// querying Geotab Ace...</div></div>`;
+  logEl.scrollTop = logEl.scrollHeight;
+
+  try {
+    const res = await fetch(`${API}/api/ace-query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question })
+    });
+    
+    if (!res.ok) throw new Error('API Error');
+    const data = await res.json();
+    
+    // Remove loading
+    document.getElementById(loadingId)?.remove();
+
+    // Show source
+    if (sourceEl) {
+      sourceEl.textContent = data.source === 'ace' ? 'Geotab Ace AI' : 'Local Fallback';
+      sourceEl.style.borderColor = data.source === 'ace' ? 'var(--accent)' : 'var(--yellow)';
+    }
+
+    // Add answer
+    let answerHtml = `<div class="ace-msg-answer">${data.answer || 'No response'}</div>`;
+    logEl.innerHTML += `<div class="ace-msg">${answerHtml}</div>`;
+    logEl.scrollTop = logEl.scrollHeight;
+
+  } catch (err) {
+    document.getElementById(loadingId)?.remove();
+    logEl.innerHTML += `<div class="ace-msg"><div class="ace-msg-answer" style="color:var(--red)">// error communicating with ace</div></div>`;
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+}
+
+// === REPORT GENERATION ===
+async function generateReport(entityId, type) {
+  const container = document.getElementById('drawer-report-container');
+  if (!container) return;
+
+  container.innerHTML = `<div class="report-content" style="color:var(--text-muted);animation:blink 1s infinite;">// generating ${type} report...</div>`;
+  
+  try {
+    const res = await fetch(`${API}/api/generate-report`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entity_id: entityId, report_type: type })
+    });
+    
+    if (!res.ok) throw new Error('API Error');
+    const data = await res.json();
+    
+    container.innerHTML = `<div class="report-content">${data.report}</div>`;
+  } catch (err) {
+    container.innerHTML = `<div class="report-content" style="color:var(--red)">// failed to generate report</div>`;
+  }
+}
+
+// === TRIP REPLAY ====================
+let replayTimer = null;
+let replayState = {
+  points: [],
+  currentIndex: 0,
+  marker: null,
+  trail: null,
+  layerGroup: null,
+  isPlaying: false
+};
+
+async function replayTrip(deviceId) {
+  const container = document.getElementById('drawer-replay-container');
+  if (!container) return;
+
+  // Stop any existing replay
+  stopReplay();
+
+  container.innerHTML = `<div class="replay-controls" style="color:var(--text-muted);">// loading trip data...</div>`;
+
+  try {
+    const res = await fetch(`${API}/api/trip-replay/${deviceId}`);
+    if (!res.ok) throw new Error('API Error');
+    const data = await res.json();
+    
+    if (!data.points || data.points.length === 0) {
+      container.innerHTML = `<div class="replay-controls" style="color:var(--yellow);">// no trip data found for today</div>`;
+      return;
+    }
+
+    // Initialize replay state
+    replayState.points = data.points;
+    replayState.currentIndex = 0;
+    
+    // Create map layer group specifically for this replay
+    if (replayState.layerGroup) state.map.removeLayer(replayState.layerGroup);
+    replayState.layerGroup = L.layerGroup().addTo(state.map);
+
+    // Initial Marker
+    const startPt = data.points[0];
+    const icon = L.divIcon({
+      className: 'custom-div-icon',
+      html: `<div style="background-color: var(--accent); width: 14px; height: 14px; border-radius: 50%; border: 2px solid #000; box-shadow: 0 0 10px var(--green-glow);"></div>`,
+      iconSize: [14, 14],
+      iconAnchor: [7, 7]
+    });
+    replayState.marker = L.marker([startPt.lat, startPt.lng], { icon }).addTo(replayState.layerGroup);
+    
+    // Trail polyline
+    replayState.trail = L.polyline([[startPt.lat, startPt.lng]], {
+      color: 'var(--accent)',
+      weight: 3,
+      opacity: 0.8,
+      dashArray: '5, 5'
+    }).addTo(replayState.layerGroup);
+
+    // Zoom map to start
+    state.map.setView([startPt.lat, startPt.lng], 15);
+
+    // Render controls
+    container.innerHTML = `
+      <div class="replay-controls">
+        <button class="replay-btn" id="btn-replay-play" onclick="toggleReplayPlay()">▶</button>
+        <button class="replay-btn" id="btn-replay-stop" onclick="stopReplay()">■</button>
+        <div class="replay-progress">
+          <div class="replay-progress-bar" id="replay-progress-bar" style="width: 0%"></div>
+        </div>
+        <div class="replay-time" id="replay-time">${new Date(startPt.time).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</div>
+      </div>
+    `;
+
+    // Automatically start playing
+    toggleReplayPlay();
+
+  } catch (err) {
+    container.innerHTML = `<div class="replay-controls" style="color:var(--red)">// failed to load trip</div>`;
+  }
+}
+
+function toggleReplayPlay() {
+  replayState.isPlaying = !replayState.isPlaying;
+  const btn = document.getElementById('btn-replay-play');
+  if (btn) btn.textContent = replayState.isPlaying ? '⏸' : '▶';
+
+  if (replayState.isPlaying) {
+    if (replayState.currentIndex >= replayState.points.length - 1) {
+      // restarts if at end
+      replayState.currentIndex = 0;
+      replayState.trail.setLatLngs([[replayState.points[0].lat, replayState.points[0].lng]]);
+    }
+    replayTimer = setInterval(playNextReplayPoint, 100); // 100ms per point
+  } else {
+    clearInterval(replayTimer);
+  }
+}
+
+function stopReplay() {
+  clearInterval(replayTimer);
+  replayState.isPlaying = false;
+  if (replayState.layerGroup) {
+    state.map.removeLayer(replayState.layerGroup);
+    replayState.layerGroup = null;
+  }
+  const container = document.getElementById('drawer-replay-container');
+  if (container) container.innerHTML = '';
+}
+
+function playNextReplayPoint() {
+  if (replayState.currentIndex >= replayState.points.length - 1) {
+    clearInterval(replayTimer);
+    replayState.isPlaying = false;
+    const btn = document.getElementById('btn-replay-play');
+    if (btn) btn.textContent = '▶';
+    return;
+  }
+
+  replayState.currentIndex++;
+  const pt = replayState.points[replayState.currentIndex];
+  
+  // Move marker
+  replayState.marker.setLatLng([pt.lat, pt.lng]);
+  
+  // Extend trail
+  replayState.trail.addLatLng([pt.lat, pt.lng]);
+  
+  // Update progress bar & time
+  const pct = (replayState.currentIndex / (replayState.points.length - 1)) * 100;
+  document.getElementById('replay-progress-bar').style.width = pct + '%';
+  document.getElementById('replay-time').textContent = new Date(pt.time).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+
+  // Auto-pan map if point leaves view
+  const bounds = state.map.getBounds();
+  if (!bounds.contains([pt.lat, pt.lng])) {
+    state.map.panTo([pt.lat, pt.lng], {animate: true, duration: 0.5});
+  }
+}
+
+
+// === SIDEBAR & RESIZERS ===
+function toggleSidebar(side) {
+  const sidebar = document.getElementById(`sidebar-${side}`);
+  const resizer = document.getElementById(`resizer-${side}`);
+  if (sidebar && resizer) {
+    sidebar.classList.toggle('collapsed');
+    resizer.classList.toggle('collapsed');
+    
+    // Invalidate map size after a short delay so Leaflet recalculates bounds
+    setTimeout(() => {
+      if (state.map) state.map.invalidateSize();
+    }, 50); // Need to wait for rendering to update
+  }
+}
+
+function initResizers() {
+  const leftResizer = document.getElementById('resizer-left');
+  const rightResizer = document.getElementById('resizer-right');
+  const mainGrid = document.querySelector('.main-grid');
+
+  if (leftResizer && mainGrid) {
+    let startX, startWidth;
+    leftResizer.addEventListener('mousedown', (e) => {
+      startX = e.clientX;
+      startWidth = parseInt(getComputedStyle(mainGrid).getPropertyValue('--sidebar-left-width')) || 320;
+      document.body.style.cursor = 'col-resize';
+      leftResizer.classList.add('dragging');
+      
+      const onMouseMove = (e) => {
+        let newWidth = startWidth + (e.clientX - startX);
+        if (newWidth < 250) newWidth = 250;
+        if (newWidth > 600) newWidth = 600;
+        mainGrid.style.setProperty('--sidebar-left-width', `${newWidth}px`);
+        if (state.map) state.map.invalidateSize();
+      };
+      
+      const onMouseUp = () => {
+        document.body.style.cursor = '';
+        leftResizer.classList.remove('dragging');
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+      };
+      
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+    });
+  }
+
+  if (rightResizer && mainGrid) {
+    let startX, startWidth;
+    rightResizer.addEventListener('mousedown', (e) => {
+      startX = e.clientX;
+      startWidth = parseInt(getComputedStyle(mainGrid).getPropertyValue('--sidebar-right-width')) || 380;
+      document.body.style.cursor = 'col-resize';
+      rightResizer.classList.add('dragging');
+      
+      const onMouseMove = (e) => {
+        let newWidth = startWidth - (e.clientX - startX);
+        if (newWidth < 250) newWidth = 250;
+        if (newWidth > 600) newWidth = 600;
+        mainGrid.style.setProperty('--sidebar-right-width', `${newWidth}px`);
+        if (state.map) state.map.invalidateSize();
+      };
+      
+      const onMouseUp = () => {
+        document.body.style.cursor = '';
+        rightResizer.classList.remove('dragging');
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+      };
+      
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+    });
+  }
+}
