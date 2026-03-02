@@ -18,21 +18,23 @@ import json
 import time
 import hashlib
 import logging
+import threading
 import duckdb
 
 logger = logging.getLogger(__name__)
 
 
 class DuckDBCache:
-    """Manages the local DuckDB analytics cache."""
+    """Manages the local DuckDB analytics cache. Thread-safe via a lock."""
 
     def __init__(self, db_path="geopulse.db"):
         self.db_path = db_path
         self.conn = None
+        self._lock = threading.Lock()
 
     def initialize(self):
         """Create all tables if they don't exist."""
-        self.conn = duckdb.connect(self.db_path)
+        self.conn = duckdb.connect(self.db_path, config={"threads": 1})
 
         # === FleetDNA Tables ===
         self.conn.execute("""
@@ -110,16 +112,40 @@ class DuckDBCache:
         if self.conn is None:
             self.initialize()
 
+    def _exec(self, sql, params=None):
+        """Thread-safe execute (for writes — no fetch)."""
+        self._ensure_conn()
+        with self._lock:
+            if params:
+                self.conn.execute(sql, params)
+            else:
+                self.conn.execute(sql)
+
+    def _fetchone(self, sql, params=None):
+        """Thread-safe execute + fetchone (result fetched INSIDE the lock)."""
+        self._ensure_conn()
+        with self._lock:
+            if params:
+                return self.conn.execute(sql, params).fetchone()
+            return self.conn.execute(sql).fetchone()
+
+    def _fetchall(self, sql, params=None):
+        """Thread-safe execute + fetchall (result fetched INSIDE the lock)."""
+        self._ensure_conn()
+        with self._lock:
+            if params:
+                return self.conn.execute(sql, params).fetchall()
+            return self.conn.execute(sql).fetchall()
+
     # === LLM Cache ===
 
     def get_llm_cache(self, cache_key, ttl_seconds=3600):
         """Get cached LLM response if fresh."""
-        self._ensure_conn()
         try:
-            result = self.conn.execute(
+            result = self._fetchone(
                 "SELECT response, created_at FROM llm_cache WHERE cache_key = ?",
                 [cache_key]
-            ).fetchone()
+            )
             if result and (time.time() - result[1]) < ttl_seconds:
                 return result[0]
         except Exception:
@@ -128,8 +154,7 @@ class DuckDBCache:
 
     def set_llm_cache(self, cache_key, response, model="unknown"):
         """Store LLM response in cache."""
-        self._ensure_conn()
-        self.conn.execute(
+        self._exec(
             """INSERT OR REPLACE INTO llm_cache (cache_key, response, model, created_at)
                VALUES (?, ?, ?, ?)""",
             [cache_key, response, model, time.time()]
@@ -139,13 +164,12 @@ class DuckDBCache:
 
     def get_api_cache(self, endpoint, params_hash, ttl_seconds=60):
         """Get cached API response if fresh."""
-        self._ensure_conn()
         cache_key = f"{endpoint}:{params_hash}"
         try:
-            result = self.conn.execute(
+            result = self._fetchone(
                 "SELECT response, cached_at, ttl_seconds FROM api_cache WHERE cache_key = ?",
                 [cache_key]
-            ).fetchone()
+            )
             if result:
                 ttl = result[2] if result[2] else ttl_seconds
                 if (time.time() - result[1]) < ttl:
@@ -156,9 +180,8 @@ class DuckDBCache:
 
     def set_api_cache(self, endpoint, params_hash, response, ttl_seconds=60):
         """Store API response in cache."""
-        self._ensure_conn()
         cache_key = f"{endpoint}:{params_hash}"
-        self.conn.execute(
+        self._exec(
             """INSERT OR REPLACE INTO api_cache (cache_key, response, ttl_seconds, cached_at)
                VALUES (?, ?, ?, ?)""",
             [cache_key, json.dumps(response), ttl_seconds, time.time()]
@@ -168,13 +191,12 @@ class DuckDBCache:
 
     def get_tts_cache(self, text):
         """Get cached TTS audio path if it exists."""
-        self._ensure_conn()
         text_hash = hashlib.sha256(text.encode()).hexdigest()[:32]
         try:
-            result = self.conn.execute(
+            result = self._fetchone(
                 "SELECT audio_path FROM tts_cache WHERE text_hash = ?",
                 [text_hash]
-            ).fetchone()
+            )
             if result:
                 import os
                 if os.path.exists(result[0]):
@@ -185,9 +207,8 @@ class DuckDBCache:
 
     def set_tts_cache(self, text, audio_path):
         """Store TTS audio path in cache."""
-        self._ensure_conn()
         text_hash = hashlib.sha256(text.encode()).hexdigest()[:32]
-        self.conn.execute(
+        self._exec(
             """INSERT OR REPLACE INTO tts_cache (text_hash, audio_path, created_at)
                VALUES (?, ?, ?)""",
             [text_hash, audio_path, time.time()]
@@ -197,8 +218,7 @@ class DuckDBCache:
 
     def store_baseline(self, driver_id, metric, mean, std_dev, p95, sample_count):
         """Store or update a driver baseline metric."""
-        self._ensure_conn()
-        self.conn.execute(
+        self._exec(
             """INSERT OR REPLACE INTO driver_baselines
                (driver_id, metric, mean, std_dev, p95, sample_count, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
@@ -207,18 +227,16 @@ class DuckDBCache:
 
     def get_baseline(self, driver_id):
         """Get all baseline metrics for a driver."""
-        self._ensure_conn()
-        results = self.conn.execute(
+        results = self._fetchall(
             "SELECT metric, mean, std_dev, p95, sample_count FROM driver_baselines WHERE driver_id = ?",
             [driver_id]
-        ).fetchall()
+        )
         return {row[0]: {"mean": row[1], "std_dev": row[2], "p95": row[3], "samples": row[4]}
                 for row in results}
 
     def store_anomaly(self, driver_id, log_date, deviation_score, anomaly_type, details):
         """Log a daily anomaly score."""
-        self._ensure_conn()
-        self.conn.execute(
+        self._exec(
             """INSERT OR REPLACE INTO anomaly_log
                (driver_id, log_date, deviation_score, anomaly_type, details)
                VALUES (?, ?, ?, ?, ?)""",
@@ -227,8 +245,7 @@ class DuckDBCache:
 
     def store_rankings(self, ranking_date, rankings):
         """Store daily fleet rankings."""
-        self._ensure_conn()
-        self.conn.execute(
+        self._exec(
             """INSERT OR REPLACE INTO fleet_rankings (ranking_date, rankings)
                VALUES (?, ?)""",
             [str(ranking_date), json.dumps(rankings)]
@@ -236,18 +253,16 @@ class DuckDBCache:
 
     def get_rankings(self, ranking_date):
         """Get rankings for a specific date."""
-        self._ensure_conn()
-        result = self.conn.execute(
+        result = self._fetchone(
             "SELECT rankings FROM fleet_rankings WHERE ranking_date = ?",
             [str(ranking_date)]
-        ).fetchone()
+        )
         return json.loads(result[0]) if result else None
 
     def store_trips(self, trips_data):
         """Bulk insert trips into the cache."""
-        self._ensure_conn()
         for t in trips_data:
-            self.conn.execute(
+            self._exec(
                 """INSERT OR REPLACE INTO trip_cache
                    (driver_id, trip_id, trip_date, distance, max_speed, average_speed,
                     duration_seconds, idle_duration_seconds, device_id, metrics)
@@ -268,8 +283,7 @@ class DuckDBCache:
 
     def get_driver_trips(self, driver_id, days_back=90):
         """Get cached trips for a driver."""
-        self._ensure_conn()
-        results = self.conn.execute(
+        results = self._fetchall(
             """SELECT trip_id, trip_date, distance, max_speed, average_speed,
                       duration_seconds, idle_duration_seconds, device_id
                FROM trip_cache
@@ -277,7 +291,7 @@ class DuckDBCache:
                AND trip_date >= CURRENT_DATE - INTERVAL ? DAY
                ORDER BY trip_date DESC""",
             [driver_id, days_back]
-        ).fetchall()
+        )
         return [
             {
                 "trip_id": r[0], "trip_date": str(r[1]), "distance": r[2],
@@ -290,15 +304,14 @@ class DuckDBCache:
 
     def get_anomaly_history(self, driver_id, days_back=30):
         """Get anomaly history for a driver."""
-        self._ensure_conn()
-        results = self.conn.execute(
+        results = self._fetchall(
             """SELECT log_date, deviation_score, anomaly_type, details
                FROM anomaly_log
                WHERE driver_id = ?
                AND log_date >= CURRENT_DATE - INTERVAL ? DAY
                ORDER BY log_date DESC""",
             [driver_id, days_back]
-        ).fetchall()
+        )
         return [
             {
                 "date": str(r[0]), "deviation_score": r[1],
@@ -309,23 +322,20 @@ class DuckDBCache:
 
     def clear_stale_cache(self, max_age_hours=24):
         """Remove old cached API/LLM responses."""
-        self._ensure_conn()
         cutoff = time.time() - (max_age_hours * 3600)
-        self.conn.execute("DELETE FROM api_cache WHERE cached_at < ?", [cutoff])
-        self.conn.execute("DELETE FROM llm_cache WHERE created_at < ?", [cutoff])
+        self._exec("DELETE FROM api_cache WHERE cached_at < ?", [cutoff])
+        self._exec("DELETE FROM llm_cache WHERE created_at < ?", [cutoff])
 
     def execute_sql(self, sql, params=None):
         """Execute raw SQL for the query_fleet_data MCP tool."""
-        self._ensure_conn()
-        if params:
-            return self.conn.execute(sql, params).fetchall()
-        return self.conn.execute(sql).fetchall()
+        return self._fetchall(sql, params)
 
     def close(self):
         """Close the database connection."""
-        if self.conn:
-            self.conn.close()
-            self.conn = None
+        with self._lock:
+            if self.conn:
+                self.conn.close()
+                self.conn = None
 
 
 # Quick test when run directly

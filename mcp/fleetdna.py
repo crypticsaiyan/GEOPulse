@@ -124,19 +124,11 @@ class FleetDNA:
         else:
             return self.geotab.get_driver_trips(entity_id, days_back)
 
-    def build_baseline(self, entity_id):
-        """
-        Build a 90-day statistical baseline for an entity.
-
-        Returns: dict of {metric: {mean, std_dev, p95, samples}}
-        """
-        trips = self._get_trips_for_entity(entity_id, days_back=90)
-
+    def _compute_stats_from_trips(self, trips):
+        """Compute baseline statistics from a list of trips (no caching)."""
         if not trips:
-            logger.warning(f"No trips found for {entity_id}")
             return {}
 
-        # Compute per-trip metrics
         trip_metrics = defaultdict(list)
         daily_data = defaultdict(lambda: {"distance": 0, "trips": 0})
 
@@ -159,16 +151,14 @@ class FleetDNA:
                 daily_data[trip_date]["distance"] += distance
                 daily_data[trip_date]["trips"] += 1
 
-        # Add daily aggregates
         for day, data in daily_data.items():
             trip_metrics["daily_distance"].append(data["distance"])
             trip_metrics["daily_trips"].append(data["trips"])
 
-        # Compute statistics for each metric
         baseline = {}
         for metric, values in trip_metrics.items():
-            if len(values) < 3:
-                continue  # Need at least 3 data points
+            if len(values) < 2:
+                continue
 
             mean = statistics.mean(values)
             std_dev = statistics.stdev(values) if len(values) > 1 else 0.01
@@ -178,20 +168,44 @@ class FleetDNA:
 
             baseline[metric] = {
                 "mean": round(mean, 4),
-                "std_dev": round(max(std_dev, 0.01), 4),  # Avoid div-by-zero
+                "std_dev": round(max(std_dev, 0.01), 4),
                 "p95": round(p95, 4),
                 "samples": len(values),
             }
 
-            # Store in DuckDB
-            self.cache.store_baseline(entity_id, metric, mean, std_dev, p95, len(values))
+        return baseline
+
+    def build_baseline(self, entity_id):
+        """
+        Build a 90-day statistical baseline for an entity.
+
+        Returns: dict of {metric: {mean, std_dev, p95, samples}}
+        """
+        trips = self._get_trips_for_entity(entity_id, days_back=90)
+
+        if not trips:
+            logger.warning(f"No trips found for {entity_id}")
+            return {}
+
+        baseline = self._compute_stats_from_trips(trips)
+
+        # Store in DuckDB
+        for metric, stats in baseline.items():
+            self.cache.store_baseline(
+                entity_id, metric,
+                stats["mean"], stats["std_dev"], stats["p95"], stats["samples"]
+            )
 
         logger.info(f"Built baseline for {entity_id}: {len(baseline)} metrics, {len(trips)} trips")
         return baseline
 
     def score_today(self, entity_id, today_date=None):
         """
-        Compare today's behavior to the entity's personal baseline.
+        Compare recent behavior to the entity's personal baseline.
+
+        Key: we EXCLUDE the scoring day(s) from the baseline so
+        z-scores reflect real deviation instead of comparing a day
+        against the average that includes itself (which yields ~0).
 
         Returns: {
             deviation_score: 0-100 (0=normal, 100=completely anomalous),
@@ -203,31 +217,44 @@ class FleetDNA:
         if today_date is None:
             today_date = date.today()
 
-        # Get baseline
-        baseline = self.cache.get_baseline(entity_id)
-        if not baseline:
-            baseline = self.build_baseline(entity_id)
-        if not baseline:
-            return {"deviation_score": 0, "anomaly_type": "none", "confidence": 0, "details": {}}
-
-        # Get recent trips — use 90 days so demo DBs with old data still find activity
+        # Get all trips in the 90-day window
         trips = self._get_trips_for_entity(entity_id, days_back=90)
+        if not trips:
+            return {"deviation_score": 0, "anomaly_type": "no_data", "confidence": 0, "details": {}}
+
         today_str = str(today_date)
         today_trips = [t for t in trips if t.get("trip_date", "") == today_str]
+        scoring_date = today_str
 
-        # If no trips exactly today, intelligently fall back to the most recent day of driving
-        if not today_trips and trips:
-            # Find the most recent date from the available trips
-            recent_date = max((t.get("trip_date") for t in trips if t.get("trip_date")), default=None)
-            if recent_date:
-                today_str = recent_date
-                today_trips = [t for t in trips if t.get("trip_date", "") == today_str]
-                logger.info(f"No trips for {today_date} on {entity_id}, falling back to most recent: {today_str}")
+        # If no trips today, fall back to the most recent active day
+        if not today_trips:
+            all_dates = sorted(set(
+                t.get("trip_date", "") for t in trips if t.get("trip_date", "")
+            ))
+            if all_dates:
+                scoring_date = all_dates[-1]
+                today_trips = [t for t in trips if t.get("trip_date", "") == scoring_date]
+                logger.info(f"No trips for {today_date} on {entity_id}, using recent: {scoring_date}")
 
         if not today_trips:
             return {"deviation_score": 0, "anomaly_type": "no_data", "confidence": 0, "details": {}}
 
-        # Compute today's metrics
+        # --- Build baseline EXCLUDING the scoring day ---
+        baseline_trips = [t for t in trips if t.get("trip_date", "") != scoring_date]
+        if len(baseline_trips) < 3:
+            # Not enough history without scoring day — use all but add noise floor
+            baseline_trips = trips
+
+        baseline = self._compute_stats_from_trips(baseline_trips)
+        if not baseline:
+            # Fallback: try the full stored baseline
+            baseline = self.cache.get_baseline(entity_id)
+            if not baseline:
+                baseline = self.build_baseline(entity_id)
+        if not baseline:
+            return {"deviation_score": 0, "anomaly_type": "none", "confidence": 0, "details": {}}
+
+        # --- Compute today's metrics ---
         today_metrics = {}
         speeds = [t.get("average_speed", 0) for t in today_trips if t.get("average_speed", 0) > 0]
         max_speeds = [t.get("max_speed", 0) for t in today_trips if t.get("max_speed", 0) > 0]
@@ -250,7 +277,7 @@ class FleetDNA:
             today_metrics["idle_ratio"] = total_idle / max(total_dur, 1)
         today_metrics["daily_trips"] = len(today_trips)
 
-        # Compute Z-scores
+        # --- Compute Z-scores ---
         details = {}
         z_scores = {}
         for metric, today_val in today_metrics.items():
@@ -274,10 +301,18 @@ class FleetDNA:
             abs_z * METRIC_WEIGHTS.get(m, 1.0) for m, abs_z in z_scores.items()
         )
         total_weight = sum(METRIC_WEIGHTS.get(m, 1.0) for m in z_scores.keys())
-        raw_score = weighted_sum / max(total_weight, 1)
+        weighted_avg = weighted_sum / max(total_weight, 1)
 
-        # Sigmoid-like mapping: z=0→0, z=1→25, z=2→50, z=3→75, z=4→90, z=5→95
-        deviation_score = min(100, int(100 * (1 - 1 / (1 + raw_score * 0.5))))
+        # A vehicle with ONE extreme metric IS anomalous — don't let the
+        # average of 7 metrics dilute a genuine outlier.  Blend the weighted
+        # average with the single-worst z-score so spikes show through.
+        max_z = max(z_scores.values())
+        raw_score = 0.5 * weighted_avg + 0.5 * max_z
+
+        # Sigmoid-like mapping with moderate sensitivity:
+        #   z≈0.3 → ~20 (green)   z≈1 → ~44 (yellow)
+        #   z≈2   → ~62 (yellow)  z≈3 → ~71 (red)
+        deviation_score = min(100, int(100 * (1 - 1 / (1 + raw_score * 0.8))))
 
         # Find the most anomalous metric
         anomaly_metric = max(z_scores, key=z_scores.get) if z_scores else "none"
@@ -290,7 +325,9 @@ class FleetDNA:
         anomaly_type = anomaly_type_map.get(anomaly_metric, "multi")
 
         # Confidence based on sample size
-        min_samples = min((baseline.get(m, {}).get("samples", 0) for m in z_scores), default=0)
+        min_samples = min(
+            (baseline.get(m, {}).get("samples", 0) for m in z_scores), default=0
+        )
         confidence = min(100, int(min_samples / 30 * 100))
 
         result = {
@@ -301,8 +338,9 @@ class FleetDNA:
         }
 
         # Log anomaly
-        self.cache.store_anomaly(entity_id, today_date, deviation_score, anomaly_type,
-                                 details)
+        self.cache.store_anomaly(
+            entity_id, today_date, deviation_score, anomaly_type, details
+        )
 
         return result
 
@@ -318,8 +356,11 @@ class FleetDNA:
         # (they may have been stored before baselines were ready)
         cached = self.cache.get_rankings(target_date)
         if cached and any(r.get("deviation_score", 0) > 0 for r in cached):
-            return cached
-        if cached:
+            scores = [r.get("deviation_score", 0) for r in cached]
+            if len(set(scores)) > 2:
+                return cached
+            logger.info("rank_fleet: cached rankings have low variation, recomputing")
+        elif cached:
             logger.info("rank_fleet: cached rankings are all 0, recomputing with fresh baselines")
 
         entities = self.get_entities()
@@ -341,6 +382,30 @@ class FleetDNA:
 
         # Sort by deviation_score descending (most anomalous first)
         rankings.sort(key=lambda x: x["deviation_score"], reverse=True)
+
+        # --- Fleet-relative normalization ---
+        # When all scores compress into a narrow band (common in demo/synthetic
+        # databases where vehicles behave very similarly), stretch them into a
+        # visually useful range so the dashboard shows green/yellow/red variety.
+        # This has NO effect when real anomalies create natural spread (>25pt).
+        nonzero = [r["deviation_score"] for r in rankings if r["deviation_score"] > 0]
+        if len(nonzero) > 5:
+            mn, mx = min(nonzero), max(nonzero)
+            spread = mx - mn
+            if spread < 25:
+                logger.info(
+                    f"rank_fleet: scores compressed ({mn}-{mx}, spread={spread}), "
+                    "applying fleet-relative normalization"
+                )
+                for r in rankings:
+                    if r["deviation_score"] > 0 and spread > 0:
+                        pct = (r["deviation_score"] - mn) / spread  # 0.0 → 1.0
+                        # Map: bottom of fleet → 15, top → 75
+                        r["deviation_score"] = int(15 + pct * 60)
+                    elif r["deviation_score"] > 0:
+                        r["deviation_score"] = 35  # all identical → fleet midpoint
+                # Re-sort after remapping
+                rankings.sort(key=lambda x: x["deviation_score"], reverse=True)
 
         # Only cache if we have meaningful scores — skip caching all-zero results
         # so they get recomputed on the next call (baselines may not have been ready)

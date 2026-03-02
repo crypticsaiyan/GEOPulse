@@ -99,7 +99,13 @@
           <div class="commentary-text" id="commentary-text">
             Initializing broadcast system...
           </div>
-          <div class="commentary-meta" id="commentary-meta"></div>
+          <div class="commentary-footer">
+            <div class="commentary-meta" id="commentary-meta"></div>
+            <div class="broadcast-countdown" id="broadcast-countdown">
+              <span class="countdown-label">NEXT UPDATE</span>
+              <span class="countdown-timer" id="countdown-timer">01:30</span>
+            </div>
+          </div>
         </div>
 
         <!-- EVENT TICKER -->
@@ -115,10 +121,11 @@
         </div>
 
         <!-- ANOMALY PANEL -->
-        <div class="panel glass-card anomaly-panel">
+        <div class="panel glass-card anomaly-panel" id="anomaly-panel">
           <div class="panel-header">
             <span class="panel-icon">⚠️</span>
             <span class="panel-title">ANOMALIES</span>
+            <span class="anomaly-count" id="anomaly-count">0</span>
           </div>
           <div class="anomaly-list" id="anomaly-list">
             <div class="ticker-empty">No anomalies</div>

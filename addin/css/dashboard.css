@@ -481,6 +481,25 @@ body::after {
   border-bottom: 1px solid var(--border);
   position: relative;
   overflow: hidden;
+  background: linear-gradient(135deg, rgba(181, 232, 83, 0.03) 0%, transparent 60%);
+}
+
+.sportscaster-panel::before {
+  content: 'ON AIR';
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: #F85149;
+  font-family: var(--font-mono);
+  animation: on-air-blink 2s ease-in-out infinite;
+}
+
+@keyframes on-air-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
 }
 
 .sportscaster-panel::after {
@@ -489,9 +508,16 @@ body::after {
   top: 0;
   left: 0;
   right: 0;
-  height: 1px;
-  background: var(--accent);
-  opacity: 0.3;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent), #F85149, var(--accent));
+  opacity: 0.6;
+  animation: broadcast-bar 3s linear infinite;
+  background-size: 200% 100%;
+}
+
+@keyframes broadcast-bar {
+  0% { background-position: 0% 0%; }
+  100% { background-position: 200% 0%; }
 }
 
 .waveform {
@@ -530,21 +556,62 @@ body::after {
   50% { height: 28px; opacity: 0.9; }
 }
 
-.waveform.active .waveform-bar { opacity: 1; }
+.waveform.active .waveform-bar {
+  opacity: 1;
+  background: linear-gradient(180deg, var(--accent), #3FB950);
+}
 
 .commentary-text {
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-primary);
   min-height: 36px;
-  font-style: normal;
+  font-style: italic;
+  transition: opacity 0.4s ease;
+  padding: 4px 0;
+}
+
+.commentary-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 10px;
 }
 
 .commentary-meta {
   font-size: 11px;
   color: var(--text-muted);
-  margin-top: 8px;
   font-family: var(--font-mono);
+}
+
+.live-indicator {
+  color: #F85149;
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: 1px;
+  animation: on-air-blink 2s ease-in-out infinite;
+}
+
+.broadcast-countdown {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+}
+
+.countdown-label {
+  font-size: 9px;
+  color: var(--text-muted);
+  letter-spacing: 1px;
+  font-weight: 600;
+}
+
+.countdown-timer {
+  font-size: 12px;
+  color: var(--accent);
+  font-weight: 600;
+  min-width: 38px;
+  text-align: right;
 }
 
 .broadcast-controls { display: flex; gap: 4px; }
@@ -566,7 +633,7 @@ body::after {
 
 /* === EVENT TICKER === */
 .ticker-list {
-  max-height: 180px;
+  max-height: 120px;
   overflow-y: auto;
 }
 
@@ -673,7 +740,7 @@ body::after {
   50% { box-shadow: inset 0 0 0 1px rgba(248, 81, 73, 0.2); }
 }
 
-.anomaly-list { max-height: 200px; overflow-y: auto; }
+.anomaly-list { max-height: 120px; overflow-y: auto; }
 
 .anomaly-item {
   padding: 10px;
@@ -716,7 +783,7 @@ body::after {
 }
 
 /* === RANKINGS === */
-.rankings-list { max-height: 180px; overflow-y: auto; }
+.rankings-list { max-height: 120px; overflow-y: auto; }
 
 .rank-item {
   display: flex;
@@ -1034,6 +1101,19 @@ body::after {
   box-shadow: 0 0 8px currentColor;
 }
 
+.marker-inner.arrow-only {
+  width: 0;
+  height: 0;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.marker-inner.arrow-only::after {
+  content: none;
+  animation: none;
+}
+
 .marker-inner::after {
   content: '';
   position: absolute;
@@ -1315,31 +1395,108 @@ body::after {
   outline: none;
 }
 
+/* === RIGHT SIDEBAR TYPOGRAPHY OVERRIDES === */
+.sidebar-right .sidebar-title {
+  font-size: 12px;
+}
+
+.sidebar-right .panel-title {
+  font-size: 11px;
+}
+
+.sidebar-right .panel-icon {
+  font-size: 14px;
+}
+
+.sidebar-right .ace-source {
+  font-size: 10px;
+}
+
+.sidebar-right .ace-chat-log {
+  font-size: 13px;
+}
+
+.sidebar-right .ace-welcome {
+  font-size: 12px;
+}
+
+.sidebar-right .ace-msg-question {
+  font-size: 12px;
+}
+
+.sidebar-right .ace-msg-answer {
+  font-size: 13px;
+}
+
+.sidebar-right .ace-msg-answer.ace-md h1,
+.sidebar-right .ace-msg-answer.ace-md h2,
+.sidebar-right .ace-msg-answer.ace-md h3,
+.sidebar-right .ace-msg-answer.ace-md h4 {
+  font-size: 14px;
+}
+
+.sidebar-right .ace-msg-answer.ace-md code,
+.sidebar-right .ace-msg-answer.ace-md pre code,
+.sidebar-right .ace-msg-answer.ace-md table {
+  font-size: 11px;
+}
+
+.sidebar-right .ace-prompt {
+  font-size: 16px;
+}
+
+.sidebar-right .ace-input {
+  font-size: 13px;
+}
+
 .ace-input::placeholder {
   color: var(--text-muted);
   font-size: 10px;
 }
 
 /* === REPORT IN DRAWER === */
-.report-content {
+.report-section {
+  margin-top: 16px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.report-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: rgba(255,255,255,0.03);
+  border-bottom: 1px solid var(--border);
+}
+
+.report-icon {
+  font-size: 14px;
+}
+
+.report-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  color: var(--accent);
+  flex: 1;
+}
+
+.report-provider {
+  font-size: 9px;
+  color: var(--text-muted);
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  letter-spacing: 0.5px;
+}
+
+.report-body {
   padding: 16px;
   font-size: 12px;
   line-height: 1.7;
   color: var(--text-secondary);
-  white-space: pre-wrap;
-  word-break: break-word;
-  border: 1px solid var(--border);
-  margin-top: 12px;
-}
-
-.report-content::before {
-  content: '// GENERATED_REPORT';
-  display: block;
-  color: var(--accent);
-  font-size: 9px;
-  letter-spacing: 1px;
-  margin-bottom: 8px;
-  opacity: 0.6;
+  max-height: 400px;
+  overflow-y: auto;
 }
 
 /* === TRIP REPLAY === */
@@ -1391,4 +1548,34 @@ body::after {
   color: var(--text-muted);
   min-width: 60px;
   text-align: right;
+}
+
+/* === COLLAPSIBLE PANELS === */
+.sidebar-left .panel-header {
+  cursor: pointer;
+  user-select: none;
+}
+
+.panel-chevron {
+  font-size: 10px;
+  color: var(--text-muted);
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+
+.panel.panel-collapsed .panel-chevron {
+  transform: rotate(-90deg);
+}
+
+.panel.panel-collapsed > *:not(.panel-header) {
+  display: none;
+}
+
+.panel.panel-collapsed {
+  padding-bottom: 4px;
+}
+
+.panel.panel-collapsed .panel-header {
+  margin-bottom: 0;
 }

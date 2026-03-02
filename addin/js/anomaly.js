@@ -36,7 +36,7 @@ function renderAnomalyPanel(anomalies) {
 
         html += `
             <div class="anomaly-item" style="padding:12px;border-bottom:1px solid var(--border);cursor:pointer;"
-                 onclick="openDetailDrawer('${a.entity_id}')">
+                 onclick="openDrawer('${a.entity_id}')">
                 <div style="display:flex;justify-content:space-between;align-items:center;">
                     <div>
                         <span>${icon}</span>
@@ -53,7 +53,7 @@ function renderAnomalyPanel(anomalies) {
                         Welfare Check
                     </button>
                     <button class="btn btn-outline" style="font-size:11px;padding:4px 10px;"
-                            onclick="event.stopPropagation();openDetailDrawer('${a.entity_id}')">
+                            onclick="event.stopPropagation();openDrawer('${a.entity_id}')">
                         Details
                     </button>
                 </div>

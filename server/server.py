@@ -103,7 +103,7 @@ class CommentaryRequest(BaseModel):
 
 class TTSRequest(BaseModel):
     text: str
-    voice: str = "en-US-Neural2-D"
+    voice: str = "en-US-Journey-F"
 
 class GroupRequest(BaseModel):
     name: str
@@ -137,7 +137,7 @@ async def live_positions():
 
     return {
         "total": len(enriched),
-        "anomalies": sum(1 for e in enriched if e["deviation_score"] > 70),
+        "anomalies": sum(1 for e in enriched if e["deviation_score"] >= 60),
         "vehicles": enriched,
     }
 
@@ -191,6 +191,20 @@ async def anomalies(threshold: int = 60):
         "anomalies": anomalous,
         "total_checked": len(rankings),
     }
+
+
+@app.get("/api/faults")
+async def faults():
+    """Get active fault codes from Geotab."""
+    import asyncio
+    try:
+        fault_list = await asyncio.to_thread(geotab.get_active_faults)
+        return {
+            "total": len(fault_list),
+            "faults": fault_list[:50],
+        }
+    except Exception as e:
+        return {"total": 0, "faults": [], "error": str(e)}
 
 
 # ---------------------------------------------------------------------------
@@ -460,16 +474,41 @@ async def generate_report(req: ReportRequest):
 
         if req.report_type == "coaching":
             system_prompt = (
-                "You are a fleet safety coach. Generate a brief coaching report "
-                "with specific, actionable recommendations. Use the driver's deviation "
-                "score and event history to personalize advice. Keep it to 3-4 paragraphs."
+                "You are a fleet safety coach. Generate a structured coaching report in Markdown.\n"
+                "Use EXACTLY this structure:\n"
+                "## Driver Coaching Report\n"
+                "### Overview\n"
+                "One paragraph: summarize driving behavior, deviation score, and overall assessment.\n"
+                "### Key Observations\n"
+                "- Bullet points of notable behaviors from the telemetry data\n"
+                "- Reference actual metric values (speeds, distances, idle ratios)\n"
+                "### Recommended Actions\n"
+                "1. Numbered specific, actionable coaching items\n"
+                "2. Each action should be concrete and measurable\n"
+                "### Positive Notes\n"
+                "Acknowledge any good behaviors or improvements visible in the data.\n\n"
+                "RULES: Keep it 150-200 words. Use ONLY data provided — never invent facts.\n"
+                "Reference actual z-scores and metric values from the context."
             )
         else:
             system_prompt = (
-                "You are a fleet operations analyst. Generate a formal incident report "
-                "including: Summary, Contributing Factors, Telemetry Analysis, and "
-                "Recommended Actions. Reference specific events and deviation scores. "
-                "Keep it professional and concise (4-5 paragraphs)."
+                "You are a fleet operations analyst. Generate a formal incident report in Markdown.\n"
+                "Use EXACTLY this structure:\n"
+                "## Incident Report\n"
+                "### Summary\n"
+                "Brief overview of the anomaly/incident with entity ID and date.\n"
+                "### Contributing Factors\n"
+                "- Bullet points of specific factors from the telemetry data\n"
+                "### Telemetry Analysis\n"
+                "| Metric | Today | Baseline | Z-Score | Status |\n"
+                "|--------|-------|----------|---------|--------|\n"
+                "Table rows for each metric from the data. Use the actual values.\n"
+                "### Risk Assessment\n"
+                "Overall risk level (Low/Medium/High/Critical) with justification.\n"
+                "### Recommended Actions\n"
+                "1. Numbered immediate and long-term action items\n\n"
+                "RULES: Keep it 200-250 words. Professional tone. Use ONLY data provided.\n"
+                "Reference actual z-scores and deviation values from the context."
             )
 
         report = await asyncio.to_thread(

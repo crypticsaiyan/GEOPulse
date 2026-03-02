@@ -7,8 +7,8 @@
     "title": "GEOPulse",
     "path": "ActivityLink/",
     "menuName": { "en": "GEOPulse" },
-    "icon": "https://placeholder.dev/addin/icon.svg",
-    "url": "https://placeholder.dev/addin/index.html"
+    "icon": "addin/icon.svg",
+    "url": "addin/index.html"
   }],
   "isSigned": false
 }

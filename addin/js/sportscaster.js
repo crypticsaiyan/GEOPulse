@@ -46,7 +46,7 @@ async function pollCommentary() {
 
 async function generateCommentary(events) {
     try {
-        const res = await fetch(`${API_BASE}/api/generate-commentary`, {
+        const res = await fetch(`${typeof API !== 'undefined' ? API : ''}/api/generate-commentary`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ events }),

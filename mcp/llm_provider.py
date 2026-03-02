@@ -145,7 +145,7 @@ class LLMProvider:
             response = requests.post(
                 f"{self.ollama_url}/api/generate",
                 json=payload,
-                timeout=15
+                timeout=30
             )
             response.raise_for_status()
             return response.json().get("response", "")

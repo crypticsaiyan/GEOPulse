@@ -40,6 +40,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initMap();
   initKeyboard();
   initStatusBar();
+  initCollapsiblePanels();
   await loadAllData();
   startLiveUpdates();
   startFreshnessTracker();
@@ -112,25 +113,38 @@ function updateMap(vehicles) {
       if (iconEl) {
         const inner = iconEl.querySelector('.marker-inner');
         if (inner) {
-          inner.style.background = color;
+          inner.style.background = 'transparent';
           inner.style.color = color;
-          inner.className = `marker-inner ${isDriving ? 'driving' : ''} ${isAnomaly ? 'anomaly' : ''}`;
+          inner.className = `marker-inner arrow-only ${isDriving ? 'driving' : ''} ${isAnomaly ? 'anomaly' : ''}`;
         }
         // Rotate arrow based on bearing
         const arrow = iconEl.querySelector('.marker-arrow');
-        if (arrow) arrow.style.transform = `rotate(${bearing}deg)`;
+        if (arrow) {
+          arrow.style.transform = `rotate(${bearing}deg)`;
+          arrow.style.opacity = '0.9';
+          arrow.style.filter = isAnomaly
+            ? `drop-shadow(0 0 5px ${color}) drop-shadow(0 0 10px ${color})`
+            : isDriving
+              ? `drop-shadow(0 0 4px ${color})`
+              : `drop-shadow(0 0 2px ${color})`;
+          const polygon = arrow.querySelector('polygon');
+          if (polygon) {
+            polygon.setAttribute('fill', color);
+            polygon.setAttribute('stroke', color);
+          }
+        }
       }
     } else {
       // Create directional arrow marker
       const icon = L.divIcon({
         className: 'vehicle-marker',
-        html: `<div class="marker-inner ${isDriving ? 'driving' : ''} ${isAnomaly ? 'anomaly' : ''}" style="background:${color};color:${color};">
-          <svg class="marker-arrow" width="18" height="18" viewBox="0 0 18 18" style="position:absolute;top:-3px;left:-3px;transform:rotate(${bearing}deg);opacity:${isDriving ? '0.8' : '0'};">
+        html: `<div class="marker-inner arrow-only ${isDriving ? 'driving' : ''} ${isAnomaly ? 'anomaly' : ''}" style="background:transparent;color:${color};">
+          <svg class="marker-arrow" width="26" height="26" viewBox="0 0 18 18" style="position:absolute;top:0;left:0;transform:rotate(${bearing}deg);opacity:0.9;filter:${isAnomaly ? `drop-shadow(0 0 5px ${color}) drop-shadow(0 0 10px ${color})` : isDriving ? `drop-shadow(0 0 4px ${color})` : `drop-shadow(0 0 2px ${color})`};">
             <polygon points="9,1 5,14 9,11 13,14" fill="${color}" stroke="rgba(255,255,255,0.3)" stroke-width="0.5"/>
           </svg>
         </div>`,
-        iconSize: [18, 18],
-        iconAnchor: [9, 9],
+        iconSize: [26, 26],
+        iconAnchor: [13, 13],
       });
 
       const marker = L.marker(latlng, { icon }).addTo(state.map);
@@ -172,6 +186,7 @@ function updateHeatmap(events) {
   // Remove old layer
   if (state.heatLayer) {
     state.map.removeLayer(state.heatLayer);
+    state.heatLayer = null;
   }
 
   // Build heat points from events with coordinates
@@ -190,7 +205,11 @@ function updateHeatmap(events) {
       blur: 15,
       maxZoom: 15,
       gradient: { 0.2: '#388BFD', 0.5: '#D29922', 0.8: '#F85149', 1.0: '#FF0000' },
-    }).addTo(state.map);
+    });
+
+    if (state.heatmapVisible) {
+      state.heatLayer.addTo(state.map);
+    }
   }
 }
 
@@ -291,7 +310,7 @@ async function fetchEvents() {
 
 async function fetchAnomalies() {
   try {
-    const res = await fetch(`${API}/api/anomalies?threshold=30`);
+    const res = await fetch(`${API}/api/anomalies?threshold=60`);
     const data = await res.json();
     state.anomalies = data.anomalies || [];
     
@@ -315,11 +334,13 @@ async function fetchAnomalies() {
 
 async function fetchFaults() {
   try {
-    // Use the positions endpoint — faults come from a separate call
-    const res = await fetch(`${API}/health`);
+    const res = await fetch(`${API}/api/faults`);
     const data = await res.json();
-    // We'll get fault count from the full fleet data
-  } catch (e) {}
+    state.faults = data.faults || [];
+    state.faultCount = data.total || 0;
+  } catch (e) {
+    console.warn('Faults fetch failed:', e);
+  }
 }
 
 function startLiveUpdates() {
@@ -330,9 +351,35 @@ function startLiveUpdates() {
   }, 5000);
 
   setInterval(fetchAnomalies, 60000);
+  setInterval(fetchFaults, 300000); // Refresh faults every 5 minutes
 
   // Auto-refresh broadcast commentary every 90s with latest events
-  setInterval(requestCommentary, 90000);
+  const BROADCAST_INTERVAL = 90;
+  setInterval(requestCommentary, BROADCAST_INTERVAL * 1000);
+  startBroadcastCountdown(BROADCAST_INTERVAL);
+}
+
+// === BROADCAST COUNTDOWN ===
+let _countdownSec = 0;
+let _countdownInterval = null;
+
+function startBroadcastCountdown(totalSec) {
+  _countdownSec = totalSec;
+  const timerEl = document.getElementById('countdown-timer');
+  if (_countdownInterval) clearInterval(_countdownInterval);
+  _countdownInterval = setInterval(() => {
+    _countdownSec--;
+    if (_countdownSec <= 0) _countdownSec = totalSec;
+    if (timerEl) {
+      const m = String(Math.floor(_countdownSec / 60)).padStart(2, '0');
+      const s = String(_countdownSec % 60).padStart(2, '0');
+      timerEl.textContent = `${m}:${s}`;
+    }
+  }, 1000);
+}
+
+function resetBroadcastCountdown() {
+  _countdownSec = 90;
 }
 
 // === STATS ===
@@ -469,10 +516,30 @@ async function requestCommentary() {
   if (btn) btn.style.animation = 'spin 1s linear infinite';
 
   try {
-    const recentEvents = state.events.slice(0, 8);
-    const anomalyContext = state.anomalies.length > 0
-      ? `${state.anomalies.length} anomalies detected. Top: ${state.anomalies[0]?.name} at ${state.anomalies[0]?.deviation_score}/100.`
+    // Filter by zone if active
+    let commentaryEvents = state.events;
+    let commentaryAnomalies = state.anomalies;
+    let commentaryVehicles = state.vehicles;
+
+    if (state.zoneBounds) {
+      const zoneDeviceIds = new Set(
+        state.vehicles
+          .filter(v => v.latitude && v.longitude && state.zoneBounds.contains([v.latitude, v.longitude]))
+          .map(v => v.device_id)
+      );
+      commentaryEvents = state.events.filter(e =>
+        !e.device_id || zoneDeviceIds.has(e.device_id)
+      );
+      commentaryAnomalies = state.anomalies.filter(a => zoneDeviceIds.has(a.entity_id));
+      commentaryVehicles = state.vehicles.filter(v => zoneDeviceIds.has(v.device_id));
+    }
+
+    const recentEvents = commentaryEvents.slice(0, 8);
+    const anomalyContext = commentaryAnomalies.length > 0
+      ? `${commentaryAnomalies.length} anomalies detected. Top: ${commentaryAnomalies[0]?.name} at ${commentaryAnomalies[0]?.deviation_score}/100.`
       : 'Fleet is operating normally.';
+
+    const zoneContext = state.zoneBounds ? ' [ZONE ACTIVE — reporting on selected area only]' : '';
 
     // Send only the fields the LLM needs — smaller payload = faster Ollama
     const leanEvents = recentEvents.map(e => ({
@@ -486,7 +553,7 @@ async function requestCommentary() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         events: leanEvents,
-        context: `${state.vehicles.length} vehicles. ${anomalyContext}`,
+        context: `${commentaryVehicles.length} vehicles. ${anomalyContext}${zoneContext}`,
       }),
     });
     const data = await res.json();
@@ -506,6 +573,9 @@ function showCommentary(text, provider, audio_b64 = null) {
   const metaEl = document.getElementById('commentary-meta');
   const waveform = document.getElementById('waveform');
 
+  // Reset broadcast countdown when new commentary arrives
+  resetBroadcastCountdown();
+
   // Strip markdown and LLM-added wrapper quotes
   let cleanText = text
     .replace(/[*_~`#>]+/g, '')
@@ -523,8 +593,8 @@ function showCommentary(text, provider, audio_b64 = null) {
   }
 
   if (metaEl) {
-    const now = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-    metaEl.textContent = `${now} · via ${provider || 'AI'}`;
+    const now = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    metaEl.innerHTML = `<span class="live-indicator">● LIVE</span> ${now} · via ${provider || 'AI'}`;
   }
 
   // Kick off audio immediately — use inline base64 if server sent it (no second request)
@@ -1012,6 +1082,7 @@ function toggleZoneSelection() {
     fetchPositions();
     fetchEvents();
     fetchAnomalies();
+    requestCommentary();
     
     showToast('🌍 Zone cleared. Showing full fleet.', 'success');
     return;
@@ -1069,6 +1140,7 @@ function onZoneMouseUp(e) {
   fetchPositions();
   fetchEvents();
   fetchAnomalies();
+  requestCommentary();
 }
 
 function toggleHeatmap() {
@@ -1105,7 +1177,7 @@ function drawVehicleTrails() {
     if (points.length < 2) return;
     const v = state.vehicles.find(v => v.device_id === id);
     const score = v?.deviation_score || 0;
-    const color = score > 70 ? '#F85149' : score > 40 ? '#D29922' : '#388BFD';
+    const color = score > 70 ? '#F85149' : score > 40 ? '#D29922' : '#3FB950';
     addTripTrail(points, color);
   });
 }
@@ -1245,7 +1317,9 @@ async function generateReport(entityId, type) {
   const container = document.getElementById('drawer-report-container');
   if (!container) return;
 
-  container.innerHTML = `<div class="report-content" style="color:var(--text-muted);animation:blink 1s infinite;">// generating ${type} report...</div>`;
+  const typeLabel = type === 'coaching' ? 'COACHING' : 'INCIDENT';
+  const typeIcon = type === 'coaching' ? '📋' : '📄';
+  container.innerHTML = `<div class="report-section"><div class="report-header"><span class="report-icon">${typeIcon}</span><span class="report-title">GENERATING ${typeLabel} REPORT...</span></div><div class="report-body" style="color:var(--text-muted);animation:blink 1s infinite;">// querying AI engine...</div></div>`;
   
   try {
     const res = await fetch(`${API}/api/generate-report`, {
@@ -1256,10 +1330,23 @@ async function generateReport(entityId, type) {
     
     if (!res.ok) throw new Error('API Error');
     const data = await res.json();
-    
-    container.innerHTML = `<div class="report-content">${data.report}</div>`;
+
+    // Render Markdown if marked.js is available
+    const rendered = (typeof marked !== 'undefined')
+      ? marked.parse(data.report, { breaks: true, gfm: true })
+      : data.report.replace(/\n/g, '<br>');
+
+    container.innerHTML = `
+      <div class="report-section">
+        <div class="report-header">
+          <span class="report-icon">${typeIcon}</span>
+          <span class="report-title">${typeLabel} REPORT</span>
+          <span class="report-provider">via ${data.provider || 'AI'}</span>
+        </div>
+        <div class="report-body ace-md">${rendered}</div>
+      </div>`;
   } catch (err) {
-    container.innerHTML = `<div class="report-content" style="color:var(--red)">// failed to generate report</div>`;
+    container.innerHTML = `<div class="report-section"><div class="report-header"><span class="report-icon">❌</span><span class="report-title">REPORT FAILED</span></div><div class="report-body" style="color:var(--red)">// failed to generate ${type} report</div></div>`;
   }
 }
 
@@ -1414,6 +1501,23 @@ function toggleSidebar(side) {
       if (state.map) state.map.invalidateSize();
     }, 50); // Need to wait for rendering to update
   }
+}
+
+function initCollapsiblePanels() {
+  document.querySelectorAll('.sidebar-left .panel-header').forEach(header => {
+    // Add chevron indicator
+    const chevron = document.createElement('span');
+    chevron.className = 'panel-chevron';
+    chevron.textContent = '\u25BE';
+    header.appendChild(chevron);
+
+    header.addEventListener('click', (e) => {
+      // Don't toggle if clicking buttons inside the header
+      if (e.target.closest('button, .ctrl-btn, .broadcast-controls')) return;
+      const panel = header.closest('.panel');
+      if (panel) panel.classList.toggle('panel-collapsed');
+    });
+  });
 }
 
 function initResizers() {
