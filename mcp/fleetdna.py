@@ -107,7 +107,7 @@ class FleetDNA:
             for t in (raw_trips or []):
                 device_ref = t.get("device", {})
                 device_id = device_ref.get("id", "") if isinstance(device_ref, dict) else str(device_ref)
-                start = t.get("dateTime", "")
+                start = t.get("dateTime", t.get("start", ""))
                 formatted.append({
                     "trip_id": t.get("id", ""),
                     "device_id": device_id,
@@ -210,10 +210,19 @@ class FleetDNA:
         if not baseline:
             return {"deviation_score": 0, "anomaly_type": "none", "confidence": 0, "details": {}}
 
-        # Get today's trips
-        trips = self._get_trips_for_entity(entity_id, days_back=2)
+        # Get recent trips — use 90 days so demo DBs with old data still find activity
+        trips = self._get_trips_for_entity(entity_id, days_back=90)
         today_str = str(today_date)
         today_trips = [t for t in trips if t.get("trip_date", "") == today_str]
+
+        # If no trips exactly today, intelligently fall back to the most recent day of driving
+        if not today_trips and trips:
+            # Find the most recent date from the available trips
+            recent_date = max((t.get("trip_date") for t in trips if t.get("trip_date")), default=None)
+            if recent_date:
+                today_str = recent_date
+                today_trips = [t for t in trips if t.get("trip_date", "") == today_str]
+                logger.info(f"No trips for {today_date} on {entity_id}, falling back to most recent: {today_str}")
 
         if not today_trips:
             return {"deviation_score": 0, "anomaly_type": "no_data", "confidence": 0, "details": {}}
@@ -305,10 +314,13 @@ class FleetDNA:
         if target_date is None:
             target_date = date.today()
 
-        # Check cache first
+        # Check cache first — but skip cached results where all scores are 0
+        # (they may have been stored before baselines were ready)
         cached = self.cache.get_rankings(target_date)
-        if cached:
+        if cached and any(r.get("deviation_score", 0) > 0 for r in cached):
             return cached
+        if cached:
+            logger.info("rank_fleet: cached rankings are all 0, recomputing with fresh baselines")
 
         entities = self.get_entities()
         rankings = []
@@ -330,8 +342,13 @@ class FleetDNA:
         # Sort by deviation_score descending (most anomalous first)
         rankings.sort(key=lambda x: x["deviation_score"], reverse=True)
 
-        # Cache the rankings
-        self.cache.store_rankings(target_date, rankings)
+        # Only cache if we have meaningful scores — skip caching all-zero results
+        # so they get recomputed on the next call (baselines may not have been ready)
+        has_real_scores = any(r["deviation_score"] > 0 for r in rankings)
+        if has_real_scores:
+            self.cache.store_rankings(target_date, rankings)
+        else:
+            logger.info("rank_fleet: all scores are 0 — skipping cache so baselines can be built")
 
         return rankings
 

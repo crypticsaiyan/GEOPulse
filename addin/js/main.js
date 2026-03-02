@@ -28,6 +28,10 @@ const state = {
   faultCount: 0,
   audioMuted: false,
   lastDataTime: null,
+  zoneMode: false,
+  zoneBounds: null,
+  zoneRect: null,
+  zoneStartLatlng: null,
 };
 
 // === INITIALIZATION ===
@@ -61,6 +65,7 @@ function initMap() {
     zoom: 10,
     zoomControl: false,
     attributionControl: false,
+    dragging: true, // we will toggle this during zone selection
   });
   
   L.control.zoom({ position: 'bottomright' }).addTo(state.map);
@@ -228,8 +233,17 @@ async function fetchPositions() {
     const res = await fetch(`${API}/api/live-positions`);
     const data = await res.json();
     state.vehicles = data.vehicles || [];
-    updateMap(state.vehicles);
-    renderRankings(state.vehicles);
+    
+    // Filter by zone if active
+    let displayVehicles = state.vehicles;
+    if (state.zoneBounds) {
+      displayVehicles = displayVehicles.filter(v => 
+        v.latitude && v.longitude && state.zoneBounds.contains([v.latitude, v.longitude])
+      );
+    }
+    
+    updateMap(displayVehicles);
+    renderRankings(displayVehicles);
   } catch (e) {
     console.warn('Position fetch failed:', e);
   }
@@ -245,8 +259,16 @@ async function fetchEvents() {
     
     if (data.events && data.events.length > 0) {
       state.events = [...data.events, ...state.events].slice(0, 50);
-      renderTicker(state.events);
-      updateHeatmap(state.events);
+      
+      let displayEvents = state.events;
+      if (state.zoneBounds) {
+        displayEvents = displayEvents.filter(e => 
+          !e.latitude || !e.longitude || state.zoneBounds.contains([e.latitude, e.longitude])
+        );
+      }
+      
+      renderTicker(displayEvents);
+      updateHeatmap(displayEvents);
     }
     if (data.next_version) state.eventVersion = data.next_version;
   } catch (e) {
@@ -259,7 +281,20 @@ async function fetchAnomalies() {
     const res = await fetch(`${API}/api/anomalies?threshold=30`);
     const data = await res.json();
     state.anomalies = data.anomalies || [];
-    renderAnomalies(state.anomalies);
+    
+    // We can't strictly filter anomalies by GPS if they don't return it
+    // But we could filter them by whether their device is in the zone bounds
+    let displayAnomalies = state.anomalies;
+    if (state.zoneBounds) {
+      const activeDeviceIds = new Set(
+        state.vehicles
+          .filter(v => v.latitude && v.longitude && state.zoneBounds.contains([v.latitude, v.longitude]))
+          .map(v => v.device_id)
+      );
+      displayAnomalies = displayAnomalies.filter(a => activeDeviceIds.has(a.entity_id));
+    }
+    
+    renderAnomalies(displayAnomalies);
   } catch (e) {
     console.warn('Anomalies fetch failed:', e);
   }
@@ -286,9 +321,24 @@ function startLiveUpdates() {
 
 // === STATS ===
 function updateStats() {
-  setText('stat-total', state.vehicles.length);
-  setText('stat-anomalies', state.anomalies.length);
-  setText('stat-events', state.events.length);
+  let displayVehicles = state.vehicles;
+  let displayAnomalies = state.anomalies;
+  let displayEvents = state.events;
+
+  if (state.zoneBounds) {
+    const activeDeviceIds = new Set(
+      state.vehicles
+        .filter(v => v.latitude && v.longitude && state.zoneBounds.contains([v.latitude, v.longitude]))
+        .map(v => v.device_id)
+    );
+    displayVehicles = state.vehicles.filter(v => activeDeviceIds.has(v.device_id));
+    displayAnomalies = state.anomalies.filter(a => activeDeviceIds.has(a.entity_id));
+    displayEvents = state.events.filter(e => !e.latitude || !e.longitude || state.zoneBounds.contains([e.latitude, e.longitude]));
+  }
+
+  setText('stat-total', displayVehicles.length);
+  setText('stat-anomalies', displayAnomalies.length);
+  setText('stat-events', displayEvents.length);
   setText('stat-faults', state.faultCount || '—');
   state.lastDataTime = Date.now();
   updateStatusBar();
@@ -815,7 +865,80 @@ function toggleMute() {
   showToast(state.audioMuted ? '🔇 Audio muted' : '🔊 Audio enabled', 'success');
 }
 
-// === HEATMAP / TRAILS TOGGLES ===
+// === HEATMAP / TRAILS / ZONE TOGGLES ===
+function toggleZoneSelection() {
+  const btn = document.getElementById('btn-zone');
+  if (state.zoneBounds) {
+    // Clear the active zone
+    if (state.zoneRect) state.map.removeLayer(state.zoneRect);
+    state.zoneBounds = null;
+    state.zoneRect = null;
+    btn.textContent = '[ ] Select Zone';
+    btn.classList.remove('active');
+    
+    // Re-render everything with full data
+    fetchPositions();
+    fetchEvents();
+    fetchAnomalies();
+    
+    showToast('🌍 Zone cleared. Showing full fleet.', 'success');
+    return;
+  }
+
+  // Toggle selection mode
+  state.zoneMode = !state.zoneMode;
+  if (state.zoneMode) {
+    btn.classList.add('active');
+    btn.textContent = '[Cancel Selection]';
+    state.map.dragging.disable();
+    state.map.getContainer().style.cursor = 'crosshair';
+    
+    state.map.on('mousedown', onZoneMouseDown);
+    showToast('💠 Click and drag on map to draw a tactical zone.', 'info');
+  } else {
+    btn.classList.remove('active');
+    btn.textContent = '[ ] Select Zone';
+    state.map.dragging.enable();
+    state.map.getContainer().style.cursor = '';
+    state.map.off('mousedown', onZoneMouseDown);
+  }
+}
+
+function onZoneMouseDown(e) {
+  state.zoneStartLatlng = e.latlng;
+  state.zoneBounds = L.latLngBounds(state.zoneStartLatlng, state.zoneStartLatlng);
+  state.zoneRect = L.rectangle(state.zoneBounds, { color: '#B5E853', weight: 1, fillOpacity: 0.1, dashArray: '4,4' }).addTo(state.map);
+  
+  state.map.on('mousemove', onZoneMouseMove);
+  state.map.on('mouseup', onZoneMouseUp);
+}
+
+function onZoneMouseMove(e) {
+  state.zoneBounds = L.latLngBounds(state.zoneStartLatlng, e.latlng);
+  state.zoneRect.setBounds(state.zoneBounds);
+}
+
+function onZoneMouseUp(e) {
+  state.map.off('mousemove', onZoneMouseMove);
+  state.map.off('mouseup', onZoneMouseUp);
+  state.map.off('mousedown', onZoneMouseDown);
+  
+  state.map.dragging.enable();
+  state.map.getContainer().style.cursor = '';
+  state.zoneMode = false;
+  
+  const btn = document.getElementById('btn-zone');
+  btn.classList.add('active');
+  btn.textContent = '[X] Clear Zone';
+  
+  showToast('🎯 Tactical zone established. Dashboard filtered.', 'success');
+  
+  // Re-render currently cached data but filtered by the new bounds
+  fetchPositions();
+  fetchEvents();
+  fetchAnomalies();
+}
+
 function toggleHeatmap() {
   state.heatmapVisible = !state.heatmapVisible;
   const btn = document.getElementById('btn-heatmap');
@@ -953,7 +1076,11 @@ async function sendAceQuery() {
       body: JSON.stringify({ question })
     });
     
-    if (!res.ok) throw new Error('API Error');
+    if (!res.ok) {
+      let detail = 'API Error';
+      try { detail = (await res.json()).detail || detail; } catch (_) {}
+      throw new Error(detail);
+    }
     const data = await res.json();
     
     // Remove loading
@@ -972,7 +1099,8 @@ async function sendAceQuery() {
 
   } catch (err) {
     document.getElementById(loadingId)?.remove();
-    logEl.innerHTML += `<div class="ace-msg"><div class="ace-msg-answer" style="color:var(--red)">// error communicating with ace</div></div>`;
+    const msg = err.message && err.message !== 'API Error' ? err.message : 'error communicating with ace';
+    logEl.innerHTML += `<div class="ace-msg"><div class="ace-msg-answer" style="color:var(--red)">// ${msg}</div></div>`;
     logEl.scrollTop = logEl.scrollHeight;
   }
 }

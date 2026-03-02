@@ -16,6 +16,11 @@ import json
 import logging
 from contextlib import asynccontextmanager
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s  [%(name)s] %(message)s",
+)
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -342,16 +347,24 @@ async def ace_query(req: AceQueryRequest):
         }
     except Exception as e:
         logger.warning(f"Ace query failed, falling back to LLM: {e}")
-        # Fallback: use local LLM with fleet context
+        # Fallback: use local LLM with available fleet context
         try:
+            from datetime import date as _date
+            # Use already-loaded state to avoid expensive re-queries
             fleet_context = json.dumps({
                 "total_vehicles": len(geotab.get_all_devices()),
-                "anomalies": len(dna.rank_fleet()),
+                "recent_anomalies": [
+                    {"name": r["name"], "score": r["deviation_score"], "type": r["anomaly_type"]}
+                    for r in (dna.cache.get_rankings(_date.today()) or [])
+                    if r.get("deviation_score", 0) > 40
+                ][:5],
+                "ace_unavailable": True,
+                "ace_error": str(e),
             })
             answer = llm.generate(
                 prompt=f"Answer this fleet management question using the context below.\n\nQuestion: {req.question}\n\nFleet context: {fleet_context}",
-                system_prompt="You are a fleet analytics AI. Answer questions concisely. "
-                              "If the data is insufficient, say so clearly.",
+                system_prompt="You are a fleet analytics AI. Answer questions concisely from the provided context. "
+                              "If Ace AI is unavailable, note that answers are approximate based on cached data.",
             )
             return {
                 "answer": answer,

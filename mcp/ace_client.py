@@ -34,6 +34,7 @@ class AceClient:
         self.cache = db_cache
         self._credentials = None
         self._chat_id = None
+        self._last_question = ""
 
     def _authenticate(self):
         """Authenticate with Geotab and store credentials."""
@@ -55,8 +56,9 @@ class AceClient:
             raise ValueError("Geotab authentication failed — check credentials")
         self._credentials = result["credentials"]
         # Update server in case of redirect
-        if result.get("path"):
-            self.server = result["path"]
+        path = result.get("path")
+        if path and "." in path and path.lower() != "thisserver":
+            self.server = path
         return self._credentials
 
     def _call_ace(self, function_name, function_params=None):
@@ -76,9 +78,18 @@ class AceClient:
         resp = requests.post(url, json=payload, timeout=120)
         resp.raise_for_status()
         data = resp.json()
-        if "result" in data and "apiResult" in data["result"]:
+
+        # Check for API-level errors returned as HTTP 200 with JSON error body
+        if "error" in data:
+            err = data["error"]
+            msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+            raise RuntimeError(f"Geotab Ace API error: {msg}")
+
+        if "result" in data and isinstance(data["result"], dict) and "apiResult" in data["result"]:
             results = data["result"]["apiResult"].get("results", [])
-            return results[0] if results else {}
+            if not results:
+                raise RuntimeError("Ace returned empty results — Ace may not be enabled for this database (check Administration > Beta Features)")
+            return results[0]
         return data.get("result", {})
 
     def _create_chat(self):
@@ -101,6 +112,7 @@ class AceClient:
         if not self._chat_id:
             self._create_chat()
 
+        self._last_question = question  # Store so _poll_results can pass it to _extract_answer
         result = self._call_ace("send-prompt", {
             "chat_id": self._chat_id,
             "prompt": question,
@@ -122,13 +134,20 @@ class AceClient:
                     "message_group_id": mg_id,
                 })
                 mg = result.get("message_group", {})
-                status = (mg.get("status", {}) or {}).get("status", "")
+
+                # status can be a dict {"status": "DONE"} or just a string "DONE"
+                raw_status = mg.get("status", {})
+                if isinstance(raw_status, dict):
+                    status = raw_status.get("status", "")
+                    status_error = raw_status.get("error", "Unknown error")
+                else:
+                    status = str(raw_status)
+                    status_error = "Unknown error"
 
                 if status == "DONE":
-                    return self._extract_answer(mg)
+                    return self._extract_answer(mg, question=self._last_question)
                 elif status == "FAILED":
-                    error = (mg.get("status", {}) or {}).get("error", "Unknown error")
-                    raise RuntimeError(f"Ace query failed: {error}")
+                    raise RuntimeError(f"Ace query failed: {status_error}")
 
                 logger.debug(f"Ace poll {attempt+1}/{max_attempts}: status={status}")
             except RuntimeError:
@@ -140,7 +159,7 @@ class AceClient:
 
         raise TimeoutError("Ace query timed out after 2.5 minutes")
 
-    def _extract_answer(self, message_group):
+    def _extract_answer(self, message_group, question=""):
         """Extract answer text, data rows, and reasoning from Ace response."""
         messages = message_group.get("messages", {})
 
@@ -149,25 +168,67 @@ class AceClient:
         data_rows = []
         columns = []
 
-        for key, msg in messages.items():
-            if isinstance(msg, dict):
-                # Get reasoning/explanation
-                if msg.get("reasoning"):
-                    reasoning = msg["reasoning"]
-                if msg.get("answer"):
-                    answer_text = msg["answer"]
+        # Message types that belong to the user (not Ace's response) — skip these
+        USER_TYPES = {
+            "USER", "PROMPT", "HUMAN", "INPUT", "QUERY",
+            "user", "prompt", "human", "input", "query",
+        }
 
-                # Get preview data rows
-                preview = msg.get("preview_array", [])
-                if preview:
-                    data_rows = preview
-                cols = msg.get("columns", [])
-                if cols:
-                    columns = cols
+        # messages can be a dict {id: msg} or a list [msg, ...]
+        if isinstance(messages, list):
+            msg_iter = list(enumerate(messages))
+        elif isinstance(messages, dict):
+            msg_iter = list(messages.items())
+        else:
+            msg_iter = []
 
-                # Build answer text from reasoning if not explicit
-                if not answer_text and reasoning:
-                    answer_text = reasoning
+        # Log message types at INFO level once so we can see the structure
+        type_summary = {
+            str(k): msg.get("type", msg.get("role", "?"))
+            for k, msg in msg_iter if isinstance(msg, dict)
+        }
+        logger.info(f"Ace response messages — types: {type_summary}")
+
+        for key, msg in msg_iter:
+            if not isinstance(msg, dict):
+                continue
+
+            # Skip user / prompt messages — we only want Ace's replies
+            msg_type = msg.get("type", msg.get("role", ""))
+            if msg_type in USER_TYPES:
+                logger.debug(f"Ace message [{key}]: skipping user-type '{msg_type}'")
+                continue
+
+            # Collect reasoning
+            for field in ("reasoning", "thinking", "explanation"):
+                val = msg.get(field)
+                if val and isinstance(val, str):
+                    reasoning = val
+                    break
+
+            # Look for the main answer text — Ace uses different field names
+            for field in ("answer", "text", "content", "message_text",
+                          "response", "html", "markdown", "summary"):
+                val = msg.get(field)
+                if val and isinstance(val, str) and not answer_text:
+                    # Skip if it's just echoing back the question
+                    if question and val.strip() == question.strip():
+                        logger.debug(f"Ace message [{key}]: skipping echo of question")
+                        continue
+                    answer_text = val
+                    break
+
+            # Get preview data rows
+            preview = msg.get("preview_array", [])
+            if preview and isinstance(preview, list):
+                data_rows = preview
+            cols = msg.get("columns", [])
+            if cols and isinstance(cols, list):
+                columns = cols
+
+        # If still no answer, fall back to reasoning
+        if not answer_text and reasoning:
+            answer_text = reasoning
 
         # Format data into readable text if we have rows but no text answer
         if data_rows and not answer_text:
@@ -179,6 +240,19 @@ class AceClient:
                 answer_text = f"{header}\n{rows_text}"
             else:
                 answer_text = json.dumps(data_rows[:10], indent=2)
+
+        if not answer_text:
+            # Dump the raw structure at WARNING level so we can identify the field name
+            logger.warning(
+                "Ace extraction: could not find answer text. "
+                "Raw message_group keys: %s | messages sample: %s",
+                list(message_group.keys()),
+                json.dumps(
+                    {k: (list(v.keys()) if isinstance(v, dict) else type(v).__name__)
+                     for k, v in (messages.items() if isinstance(messages, dict)
+                                  else enumerate(messages))}
+                )
+            )
 
         return {
             "answer": answer_text or "Ace returned no results for this query.",

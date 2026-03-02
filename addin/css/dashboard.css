@@ -296,6 +296,17 @@ body::after {
   letter-spacing: 0.5px;
 }
 .map-btn:hover { border-color: var(--accent); color: var(--accent); }
+.map-btn.active { background: rgba(181, 232, 83, 0.15); border-color: var(--accent); color: var(--accent); }
+
+/* Custom Tactical Selection Box */
+.tactical-selection-box {
+  position: absolute;
+  border: 1px dashed var(--accent);
+  background: rgba(181, 232, 83, 0.1);
+  pointer-events: none;
+  z-index: 1000;
+  box-shadow: 0 0 10px rgba(181, 232, 83, 0.2);
+}
 
 /* === SIDEBARS & PANELS === */
 .sidebar {
