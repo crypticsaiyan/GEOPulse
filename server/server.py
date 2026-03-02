@@ -147,7 +147,7 @@ async def live_events(from_version: str = None):
     """Get live exception events for the ticker."""
     result = geotab.get_live_events(from_version)
     return {
-        "events": result["events"][:50],
+        "events": result["events"][:200],
         "next_version": result.get("version"),
         "total": len(result["events"]),
     }
@@ -193,35 +193,111 @@ async def anomalies(threshold: int = 60):
     }
 
 
+# ---------------------------------------------------------------------------
+# Shared TTS helper — called both by /api/tts and /api/generate-commentary
+# ---------------------------------------------------------------------------
+import re as _re
+import base64 as _b64
+import asyncio as _asyncio
+
+async def _synthesize_to_b64(text: str, voice: str = "en-US-Journey-F") -> str | None:
+    """Return base64-encoded MP3 audio or None on failure."""
+    api_key = os.getenv("GOOGLE_TTS_API_KEY") or os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return None
+    try:
+        import requests as _req_inner
+        clean = _re.sub(r'\*+|#+|`+|_{2,}|~+', '', text)
+        clean = _re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', clean)
+        clean = _re.sub(r'\s+', ' ', clean).strip()
+        parts = voice.split("-")
+        lang_code = "-".join(parts[:2]) if len(parts) >= 2 else "en-US"
+        payload = {
+            "input": {"text": clean},
+            "voice": {"languageCode": lang_code, "name": voice},
+            "audioConfig": {
+                "audioEncoding": "MP3",
+                "speakingRate": 1.05,
+                "pitch": 0.0,
+                "volumeGainDb": 1.0,
+                "effectsProfileId": ["headphone-class-device"],
+            },
+        }
+        is_journey = "Journey" in voice
+        api_version = "v1beta1" if is_journey else "v1"
+
+        def _post(url, body):
+            return _req_inner.post(url, json=body, timeout=20)  # Journey can take up to 15s
+
+        resp = await _asyncio.to_thread(
+            _post,
+            f"https://texttospeech.googleapis.com/{api_version}/text:synthesize?key={api_key}",
+            payload,
+        )
+        if not resp.ok and is_journey:
+            payload["voice"]["name"] = f"{lang_code}-Neural2-F"
+            payload["audioConfig"].pop("effectsProfileId", None)
+            resp = await _asyncio.to_thread(
+                _post,
+                f"https://texttospeech.googleapis.com/v1/text:synthesize?key={api_key}",
+                payload,
+            )
+        resp.raise_for_status()
+        return resp.json().get("audioContent")  # already base64
+    except Exception as e:
+        logger.warning(f"TTS synthesis failed: {e}")
+        return None
+
+
 @app.post("/api/generate-commentary")
 async def generate_commentary(req: CommentaryRequest):
-    """Generate sportscaster-style commentary from events."""
+    """Generate sportscaster-style commentary and TTS audio in one shot."""
     system_prompt = (
-        f"You are a {req.tone}. "
-        "Rules: "
-        "- Voice: match the tone perfectly. "
-        "- Celebrate good driving if tone allows: 'Marcus is having an absolute clinic today'. "
-        "- Flag concerns with urgency: 'that's the third harsh brake this morning'. "
-        "- Mention specific vehicle numbers and driver names. "
-        "- When FleetDNA flags an anomaly, note it with the deviation percentage. "
-        "- Keep each commentary update to 3-4 sentences max. "
-        "- Never use corporate/robotic language. You're having fun with this. "
-        "Return ONLY the spoken text, no formatting."
+        f"You are an {req.tone}.\n"
+        "STRICT RULES:\n"
+        "- ONLY reference vehicle names and event types EXACTLY as given in the data below.\n"
+        "- Do NOT invent driver names, speeds, scores, or any details not in the data.\n"
+        "- If an event says 'Harsh Braking', you may comment on it but do not add made-up specifics.\n"
+        "- If a driver name is provided, use it. If not, refer to the vehicle name.\n"
+        "- Keep commentary to 2-3 short sentences maximum.\n"
+        "- Use an upbeat, human sportscaster voice — never robotic or corporate.\n"
+        "- Do NOT wrap your response in quotes or add any labels/formatting.\n"
+        "Return ONLY the spoken commentary text."
     )
 
-    events_text = json.dumps(req.events[:10], default=str)
-    prompt = f"Generate live commentary for these fleet events:\n{events_text}"
+    # Use a lean summary string instead of full JSON — fewer tokens = faster Ollama
+    event_summary = "; ".join(
+        f"{ev.get('device_name','?')}: {ev.get('rule_name','event')}"
+        + (f" (driver: {ev['driver_name']})" if ev.get('driver_name') else "")
+        for ev in req.events[:8]
+    )
+    prompt = f"Fleet events right now: {event_summary}"
     if req.context:
-        prompt += f"\n\nAdditional context: {req.context}"
+        prompt += f"\nFleet status: {req.context}"
+
+    # Cache key: vehicle/rule pairs + 1-minute bucket → fresh commentary each minute
+    # but cache hits within the same minute for repeated clicks
+    import time as _time
+    minute_bucket = int(_time.time() // 60)
+    cache_fingerprint = "|".join(
+        f"{ev.get('device_name','')}/{ev.get('rule_name','')}"
+        for ev in req.events[:8]
+    )
+    cache_key = f"commentary_{hash(cache_fingerprint) % 1000000}_{minute_bucket}"
 
     try:
-        text = llm.generate_cached(
+        text = await _asyncio.to_thread(
+            llm.generate_cached,
             prompt=prompt,
             system_prompt=system_prompt,
-            cache_key=f"commentary_{hash(events_text) % 100000}",
-            ttl_seconds=300,
+            cache_key=cache_key,
+            ttl_seconds=120,
+            max_tokens=200,
         )
-        return {"text": text, "provider": llm.get_info()["provider"]}
+        # Strip wrapper quotes the LLM sometimes adds
+        text = text.strip().strip('"').strip("'").strip()
+        audio_b64 = await _synthesize_to_b64(text)
+        return {"text": text, "audio_b64": audio_b64 or None, "provider": llm.get_info()["provider"]}
     except Exception as e:
         logger.warning(f"Commentary generation failed: {e}")
         # Build contextual fallback from real event data
@@ -242,67 +318,50 @@ async def generate_commentary(req: CommentaryRequest):
                 "no major flags at this moment. A calm stretch in operations — "
                 "but we'll keep our eyes on it. Stay tuned!"
             )
-        return {"text": fallback, "provider": "fallback"}
+        audio_b64 = None
+        return {"text": fallback, "provider": "fallback", "audio_b64": audio_b64}
 
 
 @app.post("/api/tts")
 async def generate_tts(req: TTSRequest):
-    """Generate TTS audio using Google Cloud Text-to-Speech."""
+    """Generate TTS audio using Google Cloud Text-to-Speech REST API."""
     # Check cache first
     if cache:
-        # Include voice in cache key to avoid mixing different voices
-        # for the same text
         cache_key = f"{req.text}_{req.voice}"
         cached_path = cache.get_tts_cache(cache_key)
         if cached_path and os.path.exists(cached_path):
             return FileResponse(cached_path, media_type="audio/mpeg")
 
+    api_key = os.getenv("GOOGLE_TTS_API_KEY") or os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="GOOGLE_TTS_API_KEY not set in .env")
+
     try:
-        from google.cloud import texttospeech
         import hashlib
 
-        # Instantiates a client
-        client = texttospeech.TextToSpeechClient()
+        audio_b64 = await _synthesize_to_b64(req.text, req.voice)
+        if not audio_b64:
+            # Return a soft error instead of 500 — frontend falls back to browser speech
+            raise HTTPException(status_code=503, detail="TTS temporarily unavailable")
 
-        # Set the text input to be synthesized
-        synthesis_input = texttospeech.SynthesisInput(text=req.text)
-
-        # Build the voice request, select the language code and the ssml
-        # voice gender ("neutral")
-        parts = req.voice.split("-")
-        lang_code = "-".join(parts[:2]) if len(parts) >= 2 else "en-US"
-        voice = texttospeech.VoiceSelectionParams(
-            language_code=lang_code,
-            name=req.voice
-        )
-
-        # Select the type of audio file you want returned
-        audio_config = texttospeech.AudioConfig(
-            audio_encoding=texttospeech.AudioEncoding.MP3
-        )
-
-        # Perform the text-to-speech request on the text input with the selected
-        # voice parameters and audio file type
-        response = client.synthesize_speech(
-            input=synthesis_input, voice=voice, audio_config=audio_config
-        )
+        audio_bytes = _b64.b64decode(audio_b64)
 
         os.makedirs(os.path.join(BASE_DIR, "audio"), exist_ok=True)
         filename = hashlib.sha256(f"{req.text}_{req.voice}".encode()).hexdigest()[:16] + ".mp3"
         filepath = os.path.join(BASE_DIR, "audio", filename)
 
         with open(filepath, "wb") as out:
-            # Write the response to the output file.
-            out.write(response.audio_content)
+            out.write(audio_bytes)
 
         if cache:
-            # Include voice in cache key when setting the cache as well
             cache.set_tts_cache(f"{req.text}_{req.voice}", filepath)
 
         return FileResponse(filepath, media_type="audio/mpeg")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"TTS failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=503, detail="TTS temporarily unavailable")
 
 
 @app.post("/api/write-back/group")

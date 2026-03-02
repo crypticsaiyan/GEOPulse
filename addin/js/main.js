@@ -256,20 +256,33 @@ async function fetchEvents() {
       : `${API}/api/live-events`;
     const res = await fetch(url);
     const data = await res.json();
-    
+
     if (data.events && data.events.length > 0) {
-      state.events = [...data.events, ...state.events].slice(0, 50);
-      
-      let displayEvents = state.events;
-      if (state.zoneBounds) {
-        displayEvents = displayEvents.filter(e => 
-          !e.latitude || !e.longitude || state.zoneBounds.contains([e.latitude, e.longitude])
-        );
-      }
-      
-      renderTicker(displayEvents);
-      updateHeatmap(displayEvents);
+      // Merge, deduplicate by event ID, sort newest-first
+      const seen = new Set(state.events.map(e => e.id));
+      const newUnique = data.events.filter(e => e.id && !seen.has(e.id));
+      state.events = [...newUnique, ...state.events]
+        .sort((a, b) => new Date(b.active_from) - new Date(a.active_from))
+        .slice(0, 100);
     }
+
+    // Apply zone filter for heatmap (all events, not capped)
+    const heatmapEvents = state.zoneBounds
+      ? state.events.filter(e => !e.latitude || !e.longitude || state.zoneBounds.contains([e.latitude, e.longitude]))
+      : state.events;
+    updateHeatmap(heatmapEvents);
+
+    // Build ticker with max 3 events per vehicle so one active vehicle doesn't dominate
+    const perVehicleCount = {};
+    const tickerEvents = [];
+    for (const e of heatmapEvents) {
+      const vid = e.device_id || e.device_name || 'unknown';
+      perVehicleCount[vid] = (perVehicleCount[vid] || 0) + 1;
+      if (perVehicleCount[vid] <= 3) tickerEvents.push(e);
+      if (tickerEvents.length >= 20) break;
+    }
+    renderTicker(tickerEvents);
+
     if (data.next_version) state.eventVersion = data.next_version;
   } catch (e) {
     console.warn('Events fetch failed:', e);
@@ -314,9 +327,12 @@ function startLiveUpdates() {
     await fetchPositions();
     await fetchEvents();
     updateStats();
-  }, 15000);
+  }, 5000);
 
   setInterval(fetchAnomalies, 60000);
+
+  // Auto-refresh broadcast commentary every 90s with latest events
+  setInterval(requestCommentary, 90000);
 }
 
 // === STATS ===
@@ -364,13 +380,17 @@ function renderTicker(events) {
   list.innerHTML = events.slice(0, 20).map(e => {
     const time = formatTime(e.active_from);
     const color = getEventColor(e.rule_name || '');
-    const name = e.device_name || e.driver_name || 'Unknown';
-    const rule = truncate(e.rule_name || 'Event', 32);
+    const icon = getEventIcon(e.rule_name || '');
+    const vehicleName = e.device_name || 'Unknown Vehicle';
+    const driverTag = (e.driver_name && e.driver_name !== e.device_name)
+      ? ` <span class="ticker-driver">(${e.driver_name})</span>` : '';
+    const rule = truncate(e.rule_name && e.rule_name !== 'Unknown Rule' ? e.rule_name : 'Event', 34);
 
     return `<div class="ticker-item">
       <span class="ticker-time">${time}</span>
-      <span class="ticker-dot" style="background:${color};"></span>
-      <span class="ticker-name">${name}</span>
+      <span class="ticker-icon">${icon}</span>
+      <span class="ticker-bar" style="background:${color};"></span>
+      <span class="ticker-name">${vehicleName}${driverTag}</span>
       <span class="ticker-rule">${rule}</span>
     </div>`;
   }).join('');
@@ -454,18 +474,25 @@ async function requestCommentary() {
       ? `${state.anomalies.length} anomalies detected. Top: ${state.anomalies[0]?.name} at ${state.anomalies[0]?.deviation_score}/100.`
       : 'Fleet is operating normally.';
 
+    // Send only the fields the LLM needs — smaller payload = faster Ollama
+    const leanEvents = recentEvents.map(e => ({
+      device_name: e.device_name || 'Unknown',
+      rule_name: e.rule_name || 'event',
+      driver_name: e.driver_name || '',
+    }));
+
     const res = await fetch(`${API}/api/generate-commentary`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        events: recentEvents,
-        context: `Fleet has ${state.vehicles.length} vehicles. ${anomalyContext}`,
+        events: leanEvents,
+        context: `${state.vehicles.length} vehicles. ${anomalyContext}`,
       }),
     });
     const data = await res.json();
 
     if (data.text) {
-      showCommentary(data.text, data.provider);
+      showCommentary(data.text, data.provider, data.audio_b64 || null);
     }
   } catch (e) {
     showCommentary('Broadcast signal lost. Reconnecting...', 'error');
@@ -474,15 +501,23 @@ async function requestCommentary() {
   if (btn) btn.style.animation = '';
 }
 
-function showCommentary(text, provider) {
+function showCommentary(text, provider, audio_b64 = null) {
   const textEl = document.getElementById('commentary-text');
   const metaEl = document.getElementById('commentary-meta');
   const waveform = document.getElementById('waveform');
 
+  // Strip markdown and LLM-added wrapper quotes
+  let cleanText = text
+    .replace(/[*_~`#>]+/g, '')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^"+|"+$/g, '');  // strip leading/trailing quotes from LLM
+
   if (textEl) {
     textEl.style.opacity = '0';
     setTimeout(() => {
-      textEl.textContent = `"${text}"`;
+      textEl.textContent = `"${cleanText}"`;
       textEl.style.opacity = '1';
     }, 200);
   }
@@ -492,93 +527,179 @@ function showCommentary(text, provider) {
     metaEl.textContent = `${now} · via ${provider || 'AI'}`;
   }
 
-  // Play audio
+  // Kick off audio immediately — use inline base64 if server sent it (no second request)
   if (!state.audioMuted) {
-    playCommentaryAudio(text, waveform);
+    playCommentaryAudio(cleanText, waveform, audio_b64);
   }
 }
 
 // === AUDIO PLAYBACK ===
 
 let currentAudio = null;
+let _pendingAudio = null;  // queued when no user gesture yet
 
-async function playCommentaryAudio(text, waveform) {
-  // Stop any currently playing audio
+// Browsers block audio until the user has clicked something.
+// Track this and drain the queue on first interaction.
+let _hasGesture = false;
+document.addEventListener('click', () => {
+  if (!_hasGesture) {
+    _hasGesture = true;
+    // Prewarm speech synthesis — speak a single space so the browser unlocks it
+    // Do NOT call cancel() immediately after — that blocks subsequent speech
+    if ('speechSynthesis' in window) {
+      const warm = new SpeechSynthesisUtterance(' ');
+      warm.volume = 0;
+      speechSynthesis.speak(warm);
+    }
+    // Play anything queued before the first click
+    if (_pendingAudio) {
+      const { text, waveform, audio_b64 } = _pendingAudio;
+      _pendingAudio = null;
+      playCommentaryAudio(text, waveform, audio_b64 || null);
+    }
+  }
+}, { once: false });
+
+// In-memory TTS cache: text → blob URL
+const ttsCache = new Map();
+
+async function playCommentaryAudio(text, waveform, audio_b64 = null) {
   stopCurrentAudio();
+
+  const cleanText = text
+    .replace(/[*_~`#>]+/g, '')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^"+|"+$/g, '');  // strip LLM-added quotes
+
+  // If no user gesture yet, queue and wait — browser will block any audio
+  if (!_hasGesture) {
+    _pendingAudio = { text: cleanText, waveform, audio_b64 };
+    _prefetchTTS(cleanText);  // pre-warm TTS in background while waiting
+    console.log('[GEOPulse audio] Queued audio — waiting for user gesture');
+    return;
+  }
 
   if (waveform) waveform.classList.add('active');
 
-  // Try Google Cloud TTS first
+  // --- Fast path 1: inline base64 from server ---
+  if (audio_b64) {
+    try {
+      console.log('[GEOPulse audio] Playing inline base64 audio');
+      const url = _b64toObjectURL(audio_b64);
+      await _playURL(url, waveform, () => URL.revokeObjectURL(url));
+      return;
+    } catch (e) {
+      console.warn('[GEOPulse audio] Inline b64 playback failed, trying fallbacks:', e);
+    }
+  }
+
+  // --- Fast path 2: previously cached Google TTS ---
+  if (ttsCache.has(cleanText)) {
+    try {
+      console.log('[GEOPulse audio] Playing cached TTS');
+      await _playURL(ttsCache.get(cleanText), waveform);
+      return;
+    } catch (e) {
+      console.warn('[GEOPulse audio] Cached TTS playback failed:', e);
+      ttsCache.delete(cleanText);
+    }
+  }
+
+  // --- Fallback: browser speech synthesis (zero network wait) ---
+  console.log('[GEOPulse audio] Using browser speech synthesis');
+  speakWithBrowser(cleanText, waveform);
+  _prefetchTTS(cleanText);
+}
+
+function _b64toObjectURL(b64) {
+  const byteChars = atob(b64);
+  const bytes = new Uint8Array(byteChars.length);
+  for (let i = 0; i < byteChars.length; i++) bytes[i] = byteChars.charCodeAt(i);
+  return URL.createObjectURL(new Blob([bytes], { type: 'audio/mpeg' }));
+}
+
+function _playURL(url, waveform, onEnd) {
+  return new Promise((resolve, reject) => {
+    const audio = new Audio(url);
+    currentAudio = audio;
+    audio.onended = () => {
+      if (waveform) waveform.classList.remove('active');
+      if (onEnd) onEnd();
+      currentAudio = null;
+      resolve();
+    };
+    audio.onerror = () => { currentAudio = null; reject(); };
+    audio.play().catch(reject);
+  });
+}
+
+async function _prefetchTTS(text) {
+  if (ttsCache.has(text)) return;  // already cached
   try {
     const res = await fetch(`${API}/api/tts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, voice: 'en-US-Journey-F' }),
     });
-
-    if (res.ok) {
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      currentAudio = audio;
-
-      audio.onended = () => {
-        if (waveform) waveform.classList.remove('active');
-        URL.revokeObjectURL(url);
-        currentAudio = null;
-      };
-
-      audio.onerror = () => {
-        // Fall back to Web Speech API
-        console.warn('TTS audio playback failed, trying Web Speech API');
-        speakWithBrowser(text, waveform);
-      };
-
-      await audio.play();
-      return;
+    if (!res.ok) return;
+    const blob = await res.blob();
+    // Store as object URL — revoke old entry first to avoid leaks
+    const old = ttsCache.get(text);
+    if (old) URL.revokeObjectURL(old);
+    ttsCache.set(text, URL.createObjectURL(blob));
+    // Keep cache small
+    if (ttsCache.size > 10) {
+      const oldest = ttsCache.keys().next().value;
+      URL.revokeObjectURL(ttsCache.get(oldest));
+      ttsCache.delete(oldest);
     }
-  } catch (e) {
-    console.warn('TTS endpoint failed:', e);
-  }
-
-  // Fallback: Web Speech API (free, works everywhere)
-  speakWithBrowser(text, waveform);
+  } catch (e) { /* silent — browser fallback already played */ }
 }
+
 
 function speakWithBrowser(text, waveform) {
   if (!('speechSynthesis' in window)) {
-    // No speech available — just animate waveform briefly
-    if (waveform) {
-      waveform.classList.add('active');
-      setTimeout(() => waveform.classList.remove('active'), 5000);
-    }
+    if (waveform) setTimeout(() => waveform.classList.remove('active'), 5000);
     return;
   }
 
-  // Cancel any ongoing speech
   speechSynthesis.cancel();
 
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.rate = 1.05;
-  utterance.pitch = 0.9;
-  utterance.volume = 1.0;
+  function _speak() {
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1.08;
+    utterance.pitch = 1.0;
+    utterance.volume = 1.0;
 
-  // Try to pick a good voice
+    const voices = speechSynthesis.getVoices();
+    const preferred =
+      voices.find(v => v.name === 'Google UK English Female') ||
+      voices.find(v => v.name === 'Google US English') ||
+      voices.find(v => v.name.includes('Google') && v.lang.startsWith('en')) ||
+      voices.find(v => v.name.includes('Samantha')) ||
+      voices.find(v => v.lang === 'en-US' && !v.localService) ||
+      voices.find(v => v.lang.startsWith('en-US')) ||
+      voices.find(v => v.lang.startsWith('en'));
+    if (preferred) utterance.voice = preferred;
+
+  utterance.onstart = () => { console.log('[GEOPulse audio] Speech started'); if (waveform) waveform.classList.add('active'); };
+    utterance.onend   = () => { console.log('[GEOPulse audio] Speech ended'); if (waveform) waveform.classList.remove('active'); };
+    utterance.onerror = (e) => { console.warn('[GEOPulse audio] Speech error:', e.error); if (waveform) waveform.classList.remove('active'); };
+    speechSynthesis.speak(utterance);
+  }
+
+  // Voices may not be loaded yet on first call — wait for them
   const voices = speechSynthesis.getVoices();
-  const preferred = voices.find(v => v.name.includes('Google') && v.lang.startsWith('en')) ||
-                    voices.find(v => v.lang.startsWith('en-US')) ||
-                    voices.find(v => v.lang.startsWith('en'));
-  if (preferred) utterance.voice = preferred;
-
-  utterance.onstart = () => {
-    if (waveform) waveform.classList.add('active');
-  };
-
-  utterance.onend = () => {
-    if (waveform) waveform.classList.remove('active');
-  };
-
-  speechSynthesis.speak(utterance);
+  if (voices.length > 0) {
+    _speak();
+  } else {
+    speechSynthesis.onvoiceschanged = () => {
+      speechSynthesis.onvoiceschanged = null;
+      _speak();
+    };
+  }
 }
 
 function stopCurrentAudio() {
@@ -844,6 +965,17 @@ function formatTime(dateStr) {
   } catch { return '--:--'; }
 }
 
+function getEventIcon(ruleName) {
+  const l = (ruleName || '').toLowerCase();
+  if (l.includes('collision')) return '💥';
+  if (l.includes('harsh') || l.includes('brake')) return '⚡';
+  if (l.includes('speed') || l.includes('exceed')) return '🚀';
+  if (l.includes('idle') || l.includes('stop')) return '💤';
+  if (l.includes('seat belt') || l.includes('seatbelt')) return '🔒';
+  if (l.includes('after hours')) return '🌙';
+  return '•';
+}
+
 function getEventColor(ruleName) {
   const l = (ruleName || '').toLowerCase();
   if (l.includes('harsh') || l.includes('brake') || l.includes('collision')) return '#F85149';
@@ -1092,9 +1224,12 @@ async function sendAceQuery() {
       sourceEl.style.borderColor = data.source === 'ace' ? 'var(--accent)' : 'var(--yellow)';
     }
 
-    // Add answer
-    let answerHtml = `<div class="ace-msg-answer">${data.answer || 'No response'}</div>`;
-    logEl.innerHTML += `<div class="ace-msg">${answerHtml}</div>`;
+    // Add answer — render Markdown if marked.js is available
+    const rawAnswer = data.answer || 'No response';
+    const renderedAnswer = (typeof marked !== 'undefined')
+      ? marked.parse(rawAnswer, { breaks: true, gfm: true })
+      : rawAnswer.replace(/\n/g, '<br>');
+    logEl.innerHTML += `<div class="ace-msg"><div class="ace-msg-answer ace-md">${renderedAnswer}</div></div>`;
     logEl.scrollTop = logEl.scrollHeight;
 
   } catch (err) {

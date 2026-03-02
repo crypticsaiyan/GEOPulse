@@ -36,16 +36,19 @@ class LLMProvider:
         if not self.model:
             self.model = "gemini-2.0-flash" if self.provider == "gemini" else "llama3.2"
 
-    def _init_gemini(self):
-        """Lazy-init Gemini client."""
+    def _get_gemini_client(self):
+        """Lazy-init Gemini client (new google.genai SDK)."""
         if self._gemini_model is None:
-            import google.generativeai as genai
+            from google import genai
             api_key = os.getenv("GEMINI_API_KEY")
             if not api_key:
                 raise ValueError("GEMINI_API_KEY not set in .env")
-            genai.configure(api_key=api_key)
-            self._gemini_model = genai.GenerativeModel(self.model)
+            self._gemini_model = genai.Client(api_key=api_key)
         return self._gemini_model
+
+    # Keep legacy name for backward compat
+    def _init_gemini(self):
+        return self._get_gemini_client()
 
     def generate(self, prompt, system_prompt=None, temperature=0.7, max_tokens=2048):
         """
@@ -96,33 +99,31 @@ class LLMProvider:
         return result
 
     def _generate_gemini(self, prompt, system_prompt, temperature, max_tokens):
-        """Generate via Google Gemini API with retry for quota errors."""
-        model = self._init_gemini()
+        """Generate via Google Gemini API (google.genai SDK)."""
+        from google.genai import types
+        client = self._get_gemini_client()
 
-        full_prompt = prompt
-        if system_prompt:
-            full_prompt = f"{system_prompt}\n\n---\n\n{prompt}"
-
-        max_retries = 2
-        for attempt in range(max_retries + 1):
-            try:
-                response = model.generate_content(
-                    full_prompt,
-                    generation_config={
-                        "temperature": temperature,
-                        "max_output_tokens": max_tokens,
-                    }
-                )
-                return response.text
-            except Exception as e:
-                error_str = str(e)
-                if "429" in error_str and attempt < max_retries:
-                    wait = 15 * (attempt + 1)
-                    logger.warning(f"Gemini quota hit, retry {attempt+1}/{max_retries} in {wait}s")
-                    time.sleep(wait)
-                    continue
+        contents = prompt
+        config = types.GenerateContentConfig(
+            system_instruction=system_prompt or "",
+            temperature=temperature,
+            max_output_tokens=max_tokens,
+        )
+        try:
+            response = client.models.generate_content(
+                model=self.model,
+                contents=contents,
+                config=config,
+            )
+            return response.text
+        except Exception as e:
+            error_str = str(e)
+            # On quota or rate limit, fail immediately — let the caller use fallback
+            if "429" in error_str or "quota" in error_str.lower():
+                logger.warning(f"Gemini quota hit — using fallback: {error_str[:80]}")
+            else:
                 logger.error(f"Gemini API error: {e}")
-                raise
+            raise
 
     def _generate_ollama(self, prompt, system_prompt, temperature, max_tokens):
         """Generate via local Ollama server."""
@@ -144,7 +145,7 @@ class LLMProvider:
             response = requests.post(
                 f"{self.ollama_url}/api/generate",
                 json=payload,
-                timeout=120
+                timeout=15
             )
             response.raise_for_status()
             return response.json().get("response", "")

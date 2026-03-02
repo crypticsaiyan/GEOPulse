@@ -169,8 +169,8 @@ class GeotabClient:
         if version:
             params["fromVersion"] = version
         else:
-            # First call: get recent events (resultsLimit for initial batch)
-            params["resultsLimit"] = 50
+            # First call: get recent events — use 7 days so demo DBs show variety
+            params["resultsLimit"] = 200
 
         try:
             if version:
@@ -178,18 +178,26 @@ class GeotabClient:
                 events = result.get("data", []) if isinstance(result, dict) else result
                 new_version = result.get("toVersion") if isinstance(result, dict) else None
             else:
-                # Initial load: use Get with date filter instead of GetFeed
+                # Initial load: use Get with 7-day date filter for variety
                 now = datetime.now(timezone.utc)
-                params["search"] = {"fromDate": (now - timedelta(hours=24)).isoformat()}
+                params["search"] = {"fromDate": (now - timedelta(days=7)).isoformat()}
                 events = self.call("Get", params)
-                new_version = None
+                # Bootstrap a GetFeed version token so subsequent polls only return new events
+                try:
+                    feed_result = self.call("GetFeed", {"typeName": "ExceptionEvent", "resultsLimit": 1})
+                    if isinstance(feed_result, dict):
+                        new_version = feed_result.get("toVersion")
+                except Exception:
+                    pass
+                if not new_version:
+                    new_version = None
         except Exception as e:
             logger.warning(f"GetFeed failed, falling back to Get: {e}")
             now = datetime.now(timezone.utc)
             events = self.call("Get", {
                 "typeName": "ExceptionEvent",
-                "search": {"fromDate": (now - timedelta(hours=24)).isoformat()},
-                "resultsLimit": 50
+                "search": {"fromDate": (now - timedelta(days=7)).isoformat()},
+                "resultsLimit": 200
             })
             new_version = None
 
@@ -204,24 +212,52 @@ class GeotabClient:
         for e in (events or []):
             # Safe reference extraction — handles both dict and string fields
             device_ref = e.get("device", {})
-            device_id = device_ref.get("id", "") if isinstance(device_ref, dict) else ""
+            device_id = device_ref.get("id", "") if isinstance(device_ref, dict) else str(device_ref)
+
+            # rule field: Geotab sometimes returns a plain string ID, not a dict
             rule_ref = e.get("rule", {})
-            rule_id = rule_ref.get("id", "") if isinstance(rule_ref, dict) else ""
+            if isinstance(rule_ref, dict):
+                rule_id = rule_ref.get("id", "")
+            elif isinstance(rule_ref, str) and rule_ref:
+                rule_id = rule_ref
+            else:
+                rule_id = ""
+
             driver_ref = e.get("driver", {})
             driver_id = driver_ref.get("id", "") if isinstance(driver_ref, dict) else (
                 "" if str(driver_ref) == "UnknownDriverId" else str(driver_ref))
+
+            # Location — ExceptionEvent carries a `location` point (y=lat, x=lon)
+            loc = e.get("location", {}) or {}
+            lat = loc.get("y") or loc.get("lat") or 0
+            lon = loc.get("x") or loc.get("lon") or loc.get("lng") or 0
+
+            # activeFrom can be a datetime object or an ISO string
+            active_from_raw = e.get("activeFrom", "")
+            if hasattr(active_from_raw, "isoformat"):
+                active_from_str = active_from_raw.isoformat()
+            else:
+                active_from_str = str(active_from_raw)
+
+            active_to_raw = e.get("activeTo", "")
+            if hasattr(active_to_raw, "isoformat"):
+                active_to_str = active_to_raw.isoformat()
+            else:
+                active_to_str = str(active_to_raw)
 
             formatted.append({
                 "id": e.get("id", ""),
                 "device_id": device_id,
                 "device_name": device_map.get(device_id, "Unknown"),
                 "rule_id": rule_id,
-                "rule_name": rule_map.get(rule_id, "Unknown Rule"),
+                "rule_name": rule_map.get(rule_id, "Unknown Rule") if rule_id else "Unknown Rule",
                 "driver_id": driver_id,
-                "driver_name": driver_map.get(driver_id, "Unknown"),
-                "active_from": str(e.get("activeFrom", "")),
-                "active_to": str(e.get("activeTo", "")),
+                "driver_name": driver_map.get(driver_id, ""),
+                "active_from": active_from_str,
+                "active_to": active_to_str,
                 "duration": str(e.get("duration", "")),
+                "latitude": lat,
+                "longitude": lon,
             })
         return {"events": formatted, "version": new_version or self._event_version}
 

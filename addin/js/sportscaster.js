@@ -52,20 +52,61 @@ async function generateCommentary(events) {
             body: JSON.stringify({ events }),
         });
         const data = await res.json();
-        return data.text || null;
+        if (!data.text) return null;
+        return { text: data.text, audio_b64: data.audio_b64 || null };
     } catch (e) {
         console.warn('Commentary generation failed:', e);
         return null;
     }
 }
 
-function showCommentary(text) {
+function playAudioB64(b64) {
+    try {
+        const binary = atob(b64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        const blob = new Blob([bytes], { type: 'audio/mpeg' });
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audio.onended = () => URL.revokeObjectURL(url);
+        audio.play().catch(err => {
+            console.warn('Audio playback failed, falling back to speech synthesis:', err);
+            return null;
+        });
+        return audio;
+    } catch (e) {
+        console.warn('Audio decode failed:', e);
+        return null;
+    }
+}
+
+function speakFallback(text) {
+    if (!window.speechSynthesis) return;
+    const utt = new SpeechSynthesisUtterance(text);
+    utt.rate = 1.05;
+    utt.pitch = 1.0;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utt);
+}
+
+function showCommentary(commentary) {
+    const text = typeof commentary === 'string' ? commentary : commentary.text;
+    const audio_b64 = commentary && commentary.audio_b64 ? commentary.audio_b64 : null;
+
     const textEl = document.getElementById('current-commentary');
     if (textEl) {
         textEl.textContent = text;
         textEl.style.animation = 'none';
         textEl.offsetHeight; // Trigger reflow
         textEl.style.animation = 'fade-in 0.5s ease';
+    }
+
+    // Play audio
+    if (audio_b64) {
+        const played = playAudioB64(audio_b64);
+        if (!played) speakFallback(text);
+    } else {
+        speakFallback(text);
     }
 
     // Animate waveform
