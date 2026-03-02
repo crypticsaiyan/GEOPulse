@@ -2,7 +2,7 @@
 Frequency 2b: Manager Email — Daily Morning Brief
 
 Every day at 6:30 AM, managers receive:
-- Fleet health summary (deviation scores, anomalies, faults)
+- Fleet health summary (deviation scores, anomalies)
 - Top 3 vehicles to watch
 - Yesterday's key events with LLM-generated causal analysis
 """
@@ -114,7 +114,6 @@ def run_manager_brief():
     # Gather data
     rankings = fleet_dna.rank_fleet()
     events = client.get_live_events()
-    faults = client.get_active_faults()
 
     anomalies = [r for r in rankings if r["deviation_score"] > 40]
 
@@ -124,13 +123,11 @@ def run_manager_brief():
         "event_count": len(events.get("events", [])),
         "anomalies": anomalies[:5],
         "top_rankings": rankings[:5],
-        "active_faults": len(faults),
     }
 
     fleet_data = {
         "rankings": rankings[:10],
         "events": events.get("events", [])[:10],
-        "faults": faults[:5],
         "anomalies": anomalies,
     }
 

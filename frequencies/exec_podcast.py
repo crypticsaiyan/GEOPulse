@@ -175,12 +175,6 @@ def gather_week_data(geotab_client, fleet_dna):
     except Exception:
         event_count = 0
 
-    # Faults summary
-    try:
-        faults = geotab_client.get_active_faults()
-    except Exception:
-        faults = []
-
     return {
         "week_number": datetime.now().strftime("%W"),
         "year": datetime.now().year,
@@ -191,8 +185,6 @@ def gather_week_data(geotab_client, fleet_dna):
         "most_anomalous": most_anomalous,
         "driver_spotlights": spotlights,
         "total_events_24h": event_count,
-        "active_faults": len(faults),
-        "fault_samples": faults[:5],
     }
 
 
@@ -256,7 +248,6 @@ if __name__ == "__main__":
     print(f"   Vehicles: {week_data['total_vehicles']}")
     print(f"   Avg deviation: {week_data['avg_deviation_score']}")
     print(f"   Events (24h): {week_data['total_events_24h']}")
-    print(f"   Active faults: {week_data['active_faults']}")
 
     print(f"\n🎙️ Generating podcast script...")
     script = generate_podcast_script(week_data, llm_provider)

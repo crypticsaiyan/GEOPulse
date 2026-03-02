@@ -140,7 +140,6 @@ def main():
     fleet_data = {
         "rankings": rankings[:10],
         "events": [],
-        "faults": [],
         "anomalies": fleet_summary["anomalies"],
     }
 

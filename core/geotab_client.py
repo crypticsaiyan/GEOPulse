@@ -313,6 +313,56 @@ class GeotabClient:
             })
         return formatted
 
+    def get_device_trips(self, device_id, days_back=7):
+        """Get trips for a specific device/vehicle. Cached 1hr."""
+        now = datetime.now(timezone.utc)
+        from_date = (now - timedelta(days=days_back)).isoformat()
+        to_date = now.isoformat()
+
+        params = {
+            "typeName": "Trip",
+            "search": {
+                "fromDate": from_date,
+                "toDate": to_date,
+                "deviceSearch": {"id": device_id}
+            }
+        }
+        trips = self._cached_call(f"device_trips_{device_id}_{days_back}", 3600, "Get", params)
+
+        formatted = []
+        for t in (trips or []):
+            start = t.get("dateTime", t.get("start", ""))
+            stop = t.get("nextTripStart", t.get("stop", ""))
+            distance_km = t.get("distance", 0)
+
+            duration = self._parse_duration(t.get("drivingDuration", 0))
+            idle_duration = self._parse_duration(t.get("idlingDuration", 0))
+
+            device_ref = t.get("device", {})
+            dev_id = device_ref.get("id", "") if isinstance(device_ref, dict) else str(device_ref)
+
+            driver_ref = t.get("driver", {})
+            driver_id = ""
+            if isinstance(driver_ref, dict):
+                driver_id = driver_ref.get("id", "")
+            elif isinstance(driver_ref, str) and driver_ref != "UnknownDriverId":
+                driver_id = driver_ref
+
+            formatted.append({
+                "trip_id": t.get("id", ""),
+                "driver_id": driver_id,
+                "device_id": dev_id or device_id,
+                "start_time": str(start),
+                "stop_time": str(stop),
+                "distance": distance_km,
+                "max_speed": t.get("maximumSpeed", t.get("maxSpeed", 0)),
+                "average_speed": t.get("averageSpeed", 0),
+                "duration_seconds": duration,
+                "idle_duration_seconds": idle_duration,
+                "trip_date": str(start)[:10] if start else "",
+            })
+        return formatted
+
     @staticmethod
     def _parse_duration(value):
         """Parse Geotab duration format to seconds. Handles 'HH:MM:SS', 'D.HH:MM:SS', or numeric."""
@@ -528,7 +578,7 @@ class GeotabClient:
 
 # Quick test when run directly
 if __name__ == "__main__":
-    from mcp.duckdb_cache import DuckDBCache
+    from core.duckdb_cache import DuckDBCache
 
     cache = DuckDBCache(db_path="geopulse.db")
     cache.initialize()

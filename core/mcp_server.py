@@ -15,34 +15,26 @@ Tools:
     9. create_coaching_rule — write-back: create coaching rule
    10. generate_fleet_narrative — LLM narrative from data
 
-Run: python -m mcp.mcp_server
+Run: python -m core.mcp_server
 """
 
 import json
 import asyncio
 import logging
-import importlib
 from datetime import date
 
-# Resolve naming collision: our mcp/ package shadows pip's mcp library
-# Import pip's mcp library components via importlib
-_mcp_server_mod = importlib.import_module("mcp.server")
-_mcp_stdio_mod = importlib.import_module("mcp.server.stdio")
-_mcp_types_mod = importlib.import_module("mcp.types")
+# pip's mcp library is now directly importable (no naming collision)
+from mcp.server import Server as MCPServer
+from mcp.server.stdio import stdio_server
+from mcp.types import Tool, TextContent
 
-MCPServer = _mcp_server_mod.Server
-stdio_server = _mcp_stdio_mod.stdio_server
-Tool = _mcp_types_mod.Tool
-TextContent = _mcp_types_mod.TextContent
-
-# Import our local modules (these will resolve correctly via relative paths)
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from mcp.duckdb_cache import DuckDBCache
-from mcp.geotab_client import GeotabClient
-from mcp.fleetdna import FleetDNA
-from mcp.llm_provider import LLMProvider
+from core.duckdb_cache import DuckDBCache
+from core.geotab_client import GeotabClient
+from core.fleetdna import FleetDNA
+from core.llm_provider import LLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -368,7 +360,7 @@ if __name__ == "__main__":
     print("   To connect to Claude Desktop, add to claude_desktop_config.json:")
     import sys
     python_path = sys.executable
-    print(f'   {{"command": "{python_path}", "args": ["-m", "mcp.mcp_server"]}}')
+    print(f'   {{"command": "{python_path}", "args": ["-m", "core.mcp_server"]}}')
     print("")
     print("   Starting MCP server on stdio...")
     asyncio.run(main())

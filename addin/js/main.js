@@ -15,8 +15,6 @@ const state = {
   events: [],
   anomalies: [],
   rankings: [],
-  faults: [],
-  selectedId: null,
   eventVersion: null,
   map: null,
   markers: {},
@@ -25,8 +23,8 @@ const state = {
   trailsVisible: true,
   tripTrails: [],
   vehicleTrails: {},
-  faultCount: 0,
   audioMuted: false,
+  selectedId: null,
   lastDataTime: null,
   zoneMode: false,
   zoneBounds: null,
@@ -238,7 +236,6 @@ async function loadAllData() {
     fetchPositions(),
     fetchEvents(),
     fetchAnomalies(),
-    fetchFaults(),
   ]);
   updateStats();
   fitFleet();
@@ -332,17 +329,6 @@ async function fetchAnomalies() {
   }
 }
 
-async function fetchFaults() {
-  try {
-    const res = await fetch(`${API}/api/faults`);
-    const data = await res.json();
-    state.faults = data.faults || [];
-    state.faultCount = data.total || 0;
-  } catch (e) {
-    console.warn('Faults fetch failed:', e);
-  }
-}
-
 function startLiveUpdates() {
   setInterval(async () => {
     await fetchPositions();
@@ -351,7 +337,6 @@ function startLiveUpdates() {
   }, 5000);
 
   setInterval(fetchAnomalies, 60000);
-  setInterval(fetchFaults, 300000); // Refresh faults every 5 minutes
 
   // Auto-refresh broadcast commentary every 90s with latest events
   const BROADCAST_INTERVAL = 90;
@@ -402,7 +387,6 @@ function updateStats() {
   setText('stat-total', displayVehicles.length);
   setText('stat-anomalies', displayAnomalies.length);
   setText('stat-events', displayEvents.length);
-  setText('stat-faults', state.faultCount || '—');
   state.lastDataTime = Date.now();
   updateStatusBar();
 }
@@ -534,26 +518,44 @@ async function requestCommentary() {
       commentaryVehicles = state.vehicles.filter(v => zoneDeviceIds.has(v.device_id));
     }
 
-    const recentEvents = commentaryEvents.slice(0, 8);
-    const anomalyContext = commentaryAnomalies.length > 0
-      ? `${commentaryAnomalies.length} anomalies detected. Top: ${commentaryAnomalies[0]?.name} at ${commentaryAnomalies[0]?.deviation_score}/100.`
-      : 'Fleet is operating normally.';
+    const recentEvents = commentaryEvents.slice(0, 10);
+
+    // Build rich anomaly context
+    let anomalyContext = '';
+    if (commentaryAnomalies.length > 0) {
+      const topAnomalies = commentaryAnomalies.slice(0, 3);
+      const anomalyDetails = topAnomalies.map(a =>
+        `${a.name || a.entity_id} (deviation: ${a.deviation_score}/100${a.anomaly_type ? ', type: ' + a.anomaly_type : ''})`
+      ).join('; ');
+      anomalyContext = `${commentaryAnomalies.length} anomalies detected. Top: ${anomalyDetails}.`;
+    } else {
+      anomalyContext = 'No anomalies — fleet operating within normal behavioral baselines.';
+    }
 
     const zoneContext = state.zoneBounds ? ' [ZONE ACTIVE — reporting on selected area only]' : '';
 
-    // Send only the fields the LLM needs — smaller payload = faster Ollama
-    const leanEvents = recentEvents.map(e => ({
-      device_name: e.device_name || 'Unknown',
-      rule_name: e.rule_name || 'event',
-      driver_name: e.driver_name || '',
-    }));
+    // Send richer event payload for better commentary
+    const leanEvents = recentEvents.map(e => {
+      const obj = {
+        device_name: e.device_name || 'Unknown',
+        rule_name: e.rule_name || 'event',
+        driver_name: e.driver_name || '',
+      };
+      // Attach deviation score from anomalies if available
+      const matchedAnomaly = commentaryAnomalies.find(a => a.entity_id === e.device_id);
+      if (matchedAnomaly) obj.deviation_score = matchedAnomaly.deviation_score;
+      return obj;
+    });
+
+    const movingCount = commentaryVehicles.filter(v => (v.speed || 0) > 0).length;
+    const stoppedCount = commentaryVehicles.length - movingCount;
 
     const res = await fetch(`${API}/api/generate-commentary`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         events: leanEvents,
-        context: `${commentaryVehicles.length} vehicles. ${anomalyContext}${zoneContext}`,
+        context: `${commentaryVehicles.length} vehicles tracked (${movingCount} moving, ${stoppedCount} stopped). ${anomalyContext} ${recentEvents.length} events in the last window.${zoneContext}`,
       }),
     });
     const data = await res.json();

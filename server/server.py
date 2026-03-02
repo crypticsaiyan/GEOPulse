@@ -193,20 +193,6 @@ async def anomalies(threshold: int = 60):
     }
 
 
-@app.get("/api/faults")
-async def faults():
-    """Get active fault codes from Geotab."""
-    import asyncio
-    try:
-        fault_list = await asyncio.to_thread(geotab.get_active_faults)
-        return {
-            "total": len(fault_list),
-            "faults": fault_list[:50],
-        }
-    except Exception as e:
-        return {"total": 0, "faults": [], "error": str(e)}
-
-
 # ---------------------------------------------------------------------------
 # Shared TTS helper — called both by /api/tts and /api/generate-commentary
 # ---------------------------------------------------------------------------
@@ -267,27 +253,44 @@ async def _synthesize_to_b64(text: str, voice: str = "en-US-Journey-F") -> str |
 async def generate_commentary(req: CommentaryRequest):
     """Generate sportscaster-style commentary and TTS audio in one shot."""
     system_prompt = (
-        f"You are an {req.tone}.\n"
+        f"You are an {req.tone} broadcasting live fleet intelligence updates for GEOPulse — "
+        "an AI-powered fleet behavioral analytics platform that uses FleetDNA fingerprinting to detect anomalies.\n\n"
+        "YOUR BROADCAST STYLE:\n"
+        "- Deliver 5-7 sentences of rich, insightful commentary — like an ESPN analyst breaking down the action.\n"
+        "- Open with a punchy hook about the fleet's current state.\n"
+        "- Call out specific vehicles and events by name, explaining what they mean operationally "
+        "(e.g. harsh braking could indicate road hazards, fatigue, or aggressive driving patterns).\n"
+        "- Reference FleetDNA deviation scores when provided — explain what high scores mean "
+        "(the driver/vehicle is behaving unusually compared to their historical baseline).\n"
+        "- Weave in fleet-wide context: how many vehicles are active, anomaly trends, safety patterns.\n"
+        "- Close with a forward-looking take — what to watch for, who's trending up or down.\n\n"
         "STRICT RULES:\n"
-        "- ONLY reference vehicle names and event types EXACTLY as given in the data below.\n"
+        "- ONLY reference vehicle names, event types, and scores EXACTLY as given in the data below.\n"
         "- Do NOT invent driver names, speeds, scores, or any details not in the data.\n"
-        "- If an event says 'Harsh Braking', you may comment on it but do not add made-up specifics.\n"
         "- If a driver name is provided, use it. If not, refer to the vehicle name.\n"
-        "- Keep commentary to 2-3 short sentences maximum.\n"
-        "- Use an upbeat, human sportscaster voice — never robotic or corporate.\n"
+        "- Use an upbeat, human sportscaster voice — energetic but professional, never robotic or corporate.\n"
         "- Do NOT wrap your response in quotes or add any labels/formatting.\n"
         "Return ONLY the spoken commentary text."
     )
 
-    # Use a lean summary string instead of full JSON — fewer tokens = faster Ollama
-    event_summary = "; ".join(
-        f"{ev.get('device_name','?')}: {ev.get('rule_name','event')}"
-        + (f" (driver: {ev['driver_name']})" if ev.get('driver_name') else "")
-        for ev in req.events[:8]
+    # Build a rich event summary for the LLM
+    event_lines = []
+    for i, ev in enumerate(req.events[:10], 1):
+        line = f"{i}. {ev.get('device_name','Unknown')} — {ev.get('rule_name','event')}"
+        if ev.get('driver_name'):
+            line += f" (driver: {ev['driver_name']})"
+        if ev.get('deviation_score'):
+            line += f" [FleetDNA deviation: {ev['deviation_score']}/100]"
+        event_lines.append(line)
+    event_block = "\n".join(event_lines) if event_lines else "No specific events at this moment."
+
+    prompt = (
+        f"LIVE FLEET FEED — {len(req.events)} active events:\n"
+        f"{event_block}\n\n"
     )
-    prompt = f"Fleet events right now: {event_summary}"
     if req.context:
-        prompt += f"\nFleet status: {req.context}"
+        prompt += f"FLEET STATUS: {req.context}\n"
+    prompt += "\nDeliver your broadcast now."
 
     # Cache key: vehicle/rule pairs + 1-minute bucket → fresh commentary each minute
     # but cache hits within the same minute for repeated clicks
@@ -306,7 +309,7 @@ async def generate_commentary(req: CommentaryRequest):
             system_prompt=system_prompt,
             cache_key=cache_key,
             ttl_seconds=120,
-            max_tokens=200,
+            max_tokens=500,
         )
         # Strip wrapper quotes the LLM sometimes adds
         text = text.strip().strip('"').strip("'").strip()

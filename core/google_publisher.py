@@ -67,7 +67,7 @@ def publish_to_sheets(week_data, episode_summary=None):
         body = {"values": [row]}
         result = service.spreadsheets().values().append(
             spreadsheetId=sheet_id,
-            range="Dashboard!A:H",
+            range="Dashboard!A:G",
             valueInputOption="USER_ENTERED",
             body=body,
         ).execute()
@@ -132,7 +132,7 @@ def upload_to_drive(file_path, folder_id=None):
         return {"success": False, "error": str(e)}
 
 
-def publish_podcast_episode(episode_number, audio_path, script_text, week_summary):
+def publish_podcast_episode(episode_number, audio_path, script_text, week_summary, week_data=None):
     """
     Full podcast publishing pipeline:
     1. Upload audio to Google Drive
@@ -145,6 +145,7 @@ def publish_podcast_episode(episode_number, audio_path, script_text, week_summar
         audio_path: Path to the MP3 file
         script_text: Full podcast script text
         week_summary: One-paragraph executive summary
+        week_data: Optional dict with fleet metrics for Sheets publishing
 
     Returns:
         dict with all publishing results
@@ -169,22 +170,23 @@ def publish_podcast_episode(episode_number, audio_path, script_text, week_summar
     script_result = upload_to_drive(script_path)
     results["script_upload"] = script_result
 
-    # 3. Update Sheets
-    week_data = {
-        "week_number": str(episode_number),
-        "year": datetime.now().year,
-        "total_vehicles": 0,
-        "avg_deviation_score": 0,
-        "total_events_24h": 0,
-        "most_anomalous": [],
-    }
+    # 3. Update Sheets — use real week_data if provided, otherwise basic metadata
+    if week_data is None:
+        week_data = {
+            "week_number": str(episode_number),
+            "year": datetime.now().year,
+            "total_vehicles": 0,
+            "avg_deviation_score": 0,
+            "total_events_24h": 0,
+            "most_anomalous": [],
+        }
     sheets_result = publish_to_sheets(week_data, week_summary)
     results["sheets"] = sheets_result
 
     # 4. Send exec notification email
     exec_email = os.getenv("EXEC_EMAIL")
     if exec_email:
-        from mcp.email_sender import send_email
+        from core.email_sender import send_email
 
         audio_link = results.get("audio_upload", {}).get("web_link", "#")
         email_html = _build_podcast_email(episode_number, week_summary, audio_link)
