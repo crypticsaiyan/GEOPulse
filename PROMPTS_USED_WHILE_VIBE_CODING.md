@@ -1,34 +1,53 @@
 # GEOPulse — Prompts Used While Vibe Coding
 
 This file centralizes the prompts used during GEOPulse development, based on:
-- `PLAN.md` (build-time orchestration prompt)
-- `README.md` (runtime generation prompts used by the app)
-- `geotab-vibe-guide` references used during implementation
+- [PLAN.md](./PLAN.md) (build-time orchestration prompt)
+- [README.md](./README.md) (runtime generation prompts used by the app)
+- [geotab-vibe-guide](../geotab-vibe-guide) references used during implementation
 
 Use this as the judge-facing prompt artifact for reproducibility.
 
 ---
 
-## 1) Master Build Prompt (used to scaffold GEOPulse)
+## 1) Workspace Setup & Agent Initialization
 
-> Source: `PLAN.md`
+> **How the project started:** A shared VS Code workspace (`Geotab_hackathon.code-workspace`) was created with two root folders — the empty `GEOPulse/` project folder and the `geotab-vibe-guide/` reference library. This gave Google Antigravity full visibility into both the build target and all reference documentation in a single context window.
+>
+> The [geotab-vibe-guide](../geotab-vibe-guide) was used to initialize Antigravity's agents, knowledge, and skills before any code was written. The [ANTIGRAVITY_QUICKSTART.md](../geotab-vibe-guide/guides/ANTIGRAVITY_QUICKSTART.md) guide was followed to configure the IDE agent, and then [PLAN.md](./PLAN.md) was dropped in as the master build prompt.
+
+**1a) Workspace structure prompt (run first inside Antigravity):**
+
+```text
+I've opened a shared workspace with two folders:
+- GEOPulse/  (empty — this is where we build)
+- geotab-vibe-guide/  (reference docs — treat as read-only knowledge)
+
+Before doing anything else, read and internalize these files from geotab-vibe-guide:
+1. AGENT_SUMMARY.md
+2. GEOTAB_OVERVIEW.md
+3. VIBE_CODING_CONTEXT.md
+4. guides/HACKATHON_IDEAS.md
+5. guides/ANTIGRAVITY_QUICKSTART.md
+6. guides/API_REFERENCE_FOR_AI.md
+7. guides/DATA_CONNECTOR.md
+8. guides/GEOTAB_ADDINS.md
+9. examples/  (all files)
+10. skills/   (all files)
+
+These are your ground truth for Geotab API patterns, credential handling,
+Add-In structure, and hackathon strategy. Do not guess API methods —
+look them up in these docs first. Confirm you have read them before proceeding.
+```
+
+**1b) Master build prompt (from `PLAN.md`, run after agent initialization):**
 
 ```text
 You are building GEOPulse — a Geotab Hackathon submission targeting
 three prize categories simultaneously: The Innovator ($5K), The Disruptor ($2.5K),
 and Best Use of Google Tools ($2.5K).
 
-Before writing any code, read:
-1. ./geotab-vibe-guide/AGENT_SUMMARY.md
-2. ./geotab-vibe-guide/GEOTAB_OVERVIEW.md
-3. ./geotab-vibe-guide/VIBE_CODING_CONTEXT.md
-4. ./geotab-vibe-guide/guides/HACKATHON_IDEAS.md
-5. ./geotab-vibe-guide/guides/DATA_CONNECTOR.md
-6. ./geotab-vibe-guide/guides/GEOTAB_ADDINS.md
-7. ./geotab-vibe-guide/examples/
-8. ./geotab-vibe-guide/skills/
-
-Use those files as primary reference for API patterns. Do not guess API methods.
+You have already read the geotab-vibe-guide docs. Use them as primary reference
+for all API patterns. Do not guess API methods.
 
 Build step by step and complete each step before moving on:
 - Geotab client + auth
@@ -101,7 +120,7 @@ Keep claims tied to real demo database outputs.
 
 ## 3) Runtime LLM Prompts (used by GEOPulse features)
 
-> Source: `README.md` section “AI Prompts (Verbatim)”
+> Source: [README.md](./README.md) section "AI Prompts (Verbatim)"
 
 ### 3.1 Driver Coach (Frequency 1)
 

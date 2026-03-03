@@ -2,25 +2,17 @@
 
 **One Fleet Brain. Every Stakeholder Gets Their Own Signal.**
 
+![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat&logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688?style=flat&logo=fastapi&logoColor=white)
+![DuckDB](https://img.shields.io/badge/DuckDB-cache-FFF000?style=flat&logo=duckdb&logoColor=black)
+![Geotab](https://img.shields.io/badge/Geotab-API-E3000B?style=flat&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0xMiAyQTEwIDEwIDAgMCAwIDIgMTJhMTAgMTAgMCAwIDAgMTAgMTAgMTAgMTAgMCAwIDAgMTAtMTBBMTAgMTAgMCAwIDAgMTIgMnoiLz48L3N2Zz4=&logoColor=white)
+![Google Gemini](https://img.shields.io/badge/Gemini-AI-4285F4?style=flat&logo=google&logoColor=white)
+![MCP](https://img.shields.io/badge/MCP-9%20Tools-7C3AED?style=flat&logo=anthropic&logoColor=white)
+![Leaflet](https://img.shields.io/badge/Leaflet-Maps-199900?style=flat&logo=leaflet&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-green?style=flat)
+![Hackathon](https://img.shields.io/badge/Geotab-Hackathon%202026-E3000B?style=flat)
+
 > GEOPulse reads your Geotab fleet data through an MCP server, builds a behavioral fingerprint for every driver using 90 days of history, then broadcasts **three personalized intelligence streams** — a weekly driver coaching clip, a live sportscaster dashboard, and a Monday executive podcast — so that every person in your organization hears their fleet in their own format, on their own schedule.
-
-[▶ Watch the 3-Minute Demo](./demo/GEOPulse-3min-demo.mp4)
-
-Quick submission assets:
-- [3-Minute Video Script](./DEMO_VIDEO_SCRIPT.md)
-- [README Walkthrough Script](./README_WALKTHROUGH_SCRIPT.md)
-- [Prompts Used While Vibe Coding](./PROMPTS_USED_WHILE_VIBE_CODING.md)
-- [Architecture Deep-Dive](./ARCHITECTURE.md)
-
----
-
-## 🎬 Demo Submission Assets
-
-- **Video script:** [DEMO_VIDEO_SCRIPT.md](./DEMO_VIDEO_SCRIPT.md)
-- **README walkthrough script:** [README_WALKTHROUGH_SCRIPT.md](./README_WALKTHROUGH_SCRIPT.md)
-- **Prompt library:** [PROMPTS_USED_WHILE_VIBE_CODING.md](./PROMPTS_USED_WHILE_VIBE_CODING.md)
-- **Architecture deep-dive:** [ARCHITECTURE.md](./ARCHITECTURE.md)
-- **Tip:** Keep the video exactly 3:00 and use real demo-database names/vehicle IDs from your run.
 
 ---
 
@@ -65,22 +57,12 @@ Quick submission assets:
 
 ## 📸 Screenshots
 
-> Add screenshots to a `screenshots/` folder and update the paths below.
+### Manager Dashboard — Live Map & Broadcaster
+![Manager Dashboard](./geotab.png)
 
-### Manager Dashboard — Live Map & Sportscaster
-![Manager Dashboard](./screenshots/dashboard-live-map.png)
+### Landing Page
+![Landing Page](./glanding.png)
 
-### Driver Feed — Personalized Coaching Email
-![Driver Feed Email](./screenshots/driver-feed-email.png)
-
-### FleetDNA Anomaly Panel
-![FleetDNA Anomaly Panel](./screenshots/fleetdna-anomaly-panel.png)
-
-### Executive Podcast — Monday Morning Briefing
-![Executive Podcast](./screenshots/executive-podcast.png)
-
-### Ace AI Chat — Natural Language Fleet Queries
-![Ace AI Chat](./screenshots/ace-ai-chat.png)
 
 ---
 
@@ -195,95 +177,15 @@ GEOPulse doesn't just read — it writes back to Geotab:
 
 ---
 
-## 🤖 AI Prompts (Verbatim)
-
-### Driver Coach (Frequency 1)
-```
-You are a warm, encouraging fleet safety coach generating a personal
-weekly audio script for a driver. Rules:
-- Always use their first name
-- Lead with something positive and specific (not generic)
-- Mention ONE specific rough moment with exact day, time, and location
-  (e.g. "Wednesday morning on the I-95 on-ramp at 8:42 AM")
-- Compare to THEIR OWN normal, never to fleet average
-  (e.g. "that's not your usual pattern on that stretch")
-- Include fleet rank out of total drivers
-- End warmly and specifically
-- Maximum 150 words. Must sound natural when spoken aloud.
-- Never mention data, algorithms, or scores. Just coach.
-- Tone: like a trusted colleague, not a corporate report
-```
-
-### Sportscaster Commentary (Frequency 2)
-```
-You are an energetic but professional fleet safety sportscaster.
-Rules:
-- Voice: match the tone perfectly.
-- Celebrate good driving if tone allows: 'Marcus is having an absolute clinic today'.
-- Flag concerns with urgency: 'that's the third harsh brake this morning'.
-- Mention specific vehicle numbers and driver names.
-- When FleetDNA flags an anomaly, note it with the deviation percentage.
-- Keep each commentary update to 3-4 sentences max.
-- Never use corporate/robotic language. You're having fun with this.
-Return ONLY the spoken text, no formatting.
-```
-
-### Manager Morning Brief (Frequency 2b)
-```
-You are a professional fleet operations analyst writing a morning brief.
-Rules:
-- Lead with the single most important thing the manager needs to know TODAY
-- Be specific: mention vehicle numbers, driver names, exact metrics
-- Include 3 action items ordered by urgency
-- Flag any vehicles needing immediate maintenance attention
-- Note any drivers whose behavior has changed significantly from baseline
-- Keep it under 200 words. Dense, no filler.
-- Tone: confident, data-driven, respectful of their time
-```
-
-### Executive Podcast (Frequency 3)
-```
-You are writing a script for a two-host fleet analytics podcast.
-Host 1 name: Alex. Host 2 name: Jamie.
-Rules:
-- Alex leads, Jamie provides depth and counterpoints
-- Structure: Cold open hook → Week's top story → Safety deep dive
-             → Driver spotlight (one good, one improving)
-             → Prediction for next week → Sign-off
-- Each episode: 600-700 words (5 min when spoken at natural pace)
-- Make specific references to real data: vehicle numbers, driver names,
-  percentages, dollar amounts. No vague statements.
-- Jamie should challenge Alex at least once ("But Alex, isn't the real
-  story here...") — it makes it feel real
-- One "story of the week" — the most interesting fleet narrative from the data
-- End with one specific prediction for next week based on trends
-- Format: Alex: [text] \n Jamie: [text] — no stage directions
-```
-
-### Fleet Narrative Generator (MCP Tool)
-```
-Audience-specific system prompts:
-- driver:    "You are a supportive fleet coach. Be warm, specific, encouraging."
-- manager:   "You are a fleet operations analyst. Be data-driven, concise, actionable."
-- executive: "You are a fleet strategy advisor. Focus on trends, costs, risks."
-```
-
----
 
 ## 🔵 Google Products Used
 
 | # | Product | Exact Role in GEOPulse |
 |---|---------|----------------------|
 | 1 | **Gemini 2.0 Flash** | All LLM generation: driver scripts, sportscaster commentary, manager briefs, narratives |
-| 2 | **Gemini 2.0 Flash (podcast)** | Executive podcast script — same model, higher token budget, richer prompting |
 | 3 | **Google Cloud TTS** | Driver clips (Neural2-D), sportscaster (Journey-D, Neural2-D fallback), podcast dual-voice (Neural2-J + Neural2-F) |
 | 4 | **Gmail API** | Driver weekly coaching emails + manager daily morning briefs (OAuth2 + SMTP fallback) |
-| 5 | **Google Sheets API** | Fleet Intelligence Dashboard — weekly KPI rows appended after each podcast episode |
-| 6 | **Google Drive API** | Podcast MP3 + script stored per-episode; shared link embedded in executive email |
-| 7 | **Google Cloud IAM** | Service account credentials for TTS, Sheets, and Drive integrations |
-| 8 | **Google Fonts** | Inter (UI text) + JetBrains Mono (metric values) loaded in dashboard |
-
-> **Not Google:** The fleet map uses open-source **Leaflet 1.9.4** with CartoDB Dark Matter tiles + `leaflet.heat` heatmap plugin. No API key required.
+| 5 | **Antigravity** | AI powered IDE for vibe coding|
 
 ---
 
