@@ -317,17 +317,6 @@ GEOPulse/
 
 ---
 
-## 🏆 Prize Targeting
-
-| Prize | What Judges Score | GEOPulse's Edge |
-|-------|-------------------|-----------------|
-| 🤖 **The Innovator ($5K)** | Technical AI creativity | FleetDNA personal baselines + visible MCP tool chains |
-| 💥 **The Disruptor ($2.5K)** | Most surprising idea | Live sportscaster audio — nobody else submits audio |
-| 🔵 **Google Tools ($2.5K)** | Best use of Google products | 8 products, TTS dual-voice podcast, Gemini reasoning |
-| 🤝 **Collaborative ($2.5K)** | Community activity | Open-source, shared prompts, daily progress posts |
-
----
-
 ## 📄 License
 
 MIT License — built for the [Geotab Vibe Coding Hackathon](https://geotab.com).
