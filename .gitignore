@@ -1,5 +1,7 @@
 # Environment
 .env
+.env.local
+.env.*.local
 
 # Python
 __pycache__/
@@ -40,7 +42,15 @@ Thumbs.db
 # Google Cloud credentials
 *.json
 !addin/config.json
+!dashboard/config.json
 !server/package.json
+
+# Generated reports
+reports/
+*.md.report
+
+# Scheduler state
+.apscheduler_jobs.db
 
 # Logs
 *.log

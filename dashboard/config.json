@@ -1,0 +1,14 @@
+{
+  "name": "GEOPulse",
+  "supportEmail": "geopulse@hackathon.dev",
+  "version": "1.0.0",
+  "items": [{
+    "page": "map",
+    "title": "GEOPulse",
+    "path": "ActivityLink/",
+    "menuName": { "en": "GEOPulse" },
+    "icon": "dashboard/icon.svg",
+    "url": "dashboard/index.html"
+  }],
+  "isSigned": false
+}

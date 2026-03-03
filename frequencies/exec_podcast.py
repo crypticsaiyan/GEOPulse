@@ -13,6 +13,9 @@ import os
 import sys
 import json
 import logging
+import base64
+import requests
+import re as _re
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -69,43 +72,43 @@ def generate_podcast_script(week_data, llm_provider):
 
 def generate_podcast_audio(script_text, db_cache=None):
     """Generate two-voice TTS audio. Returns file path or None."""
-    provider = os.getenv("LLM_PROVIDER", "gemini")
-
-    if provider == "ollama":
-        logger.info("Ollama mode: skipping podcast TTS")
-        return None
-
     if db_cache:
         cached = db_cache.get_tts_cache(script_text[:500])  # Use first 500 chars as key
         if cached:
             return cached
 
+    def _clean_tts_text(text):
+        clean = _re.sub(r'\*+|#+|`+|_{2,}|~+', '', text or '')
+        clean = _re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', clean)
+        clean = _re.sub(r'\s+', ' ', clean).strip()
+        return clean
+
+    def _parse_lines(text):
+        parsed = []
+        for raw_line in text.strip().split("\n"):
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith("Alex:"):
+                parsed.append((line[5:].strip(), "en-US-Neural2-J"))
+            elif line.startswith("Jamie:"):
+                parsed.append((line[6:].strip(), "en-US-Neural2-F"))
+            else:
+                parsed.append((line, "en-US-Neural2-J"))
+        cleaned = [(_clean_tts_text(text), voice) for text, voice in parsed]
+        return [(text, voice) for text, voice in cleaned if text]
+
+    lines = _parse_lines(script_text)
+    if not lines:
+        return None
+
     try:
         from google.cloud import texttospeech
 
         client = texttospeech.TextToSpeechClient()
-
-        # Parse script into Alex and Jamie lines
-        lines = script_text.strip().split("\n")
         audio_segments = []
 
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-
-            if line.startswith("Alex:"):
-                text = line[5:].strip()
-                voice_name = "en-US-Neural2-J"  # Confident male
-            elif line.startswith("Jamie:"):
-                text = line[6:].strip()
-                voice_name = "en-US-Neural2-F"  # Analytical female
-            else:
-                text = line
-                voice_name = "en-US-Neural2-J"
-
-            if not text:
-                continue
+        for text, voice_name in lines:
 
             voice = texttospeech.VoiceSelectionParams(
                 language_code="en-US", name=voice_name
@@ -141,8 +144,54 @@ def generate_podcast_audio(script_text, db_cache=None):
         return filepath
 
     except Exception as e:
-        logger.warning(f"Podcast TTS failed: {e}")
-        return None
+        logger.warning(f"Podcast TTS (ADC) failed, trying API key fallback: {e}")
+
+        api_key = os.getenv("GOOGLE_TTS_API_KEY") or os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            logger.warning("Podcast TTS fallback unavailable: no GOOGLE_TTS_API_KEY or GEMINI_API_KEY")
+            return None
+
+        try:
+            audio_segments = []
+            for text, voice_name in lines:
+                payload = {
+                    "input": {"text": text},
+                    "voice": {"languageCode": "en-US", "name": voice_name},
+                    "audioConfig": {
+                        "audioEncoding": "MP3",
+                        "speakingRate": 1.0,
+                        "pitch": 0.0,
+                    },
+                }
+                resp = requests.post(
+                    f"https://texttospeech.googleapis.com/v1/text:synthesize?key={api_key}",
+                    json=payload,
+                    timeout=(5, 35),
+                )
+                resp.raise_for_status()
+                audio_b64 = resp.json().get("audioContent")
+                if audio_b64:
+                    audio_segments.append(base64.b64decode(audio_b64))
+
+            if not audio_segments:
+                return None
+
+            os.makedirs("audio", exist_ok=True)
+            week_num = datetime.now().strftime("%W")
+            filepath = f"audio/podcast_week{week_num}.mp3"
+
+            with open(filepath, "wb") as f:
+                for segment in audio_segments:
+                    f.write(segment)
+
+            if db_cache:
+                db_cache.set_tts_cache(script_text[:500], filepath)
+
+            logger.info(f"Generated podcast audio (API key): {filepath}")
+            return filepath
+        except Exception as fallback_error:
+            logger.warning(f"Podcast TTS fallback failed: {fallback_error}")
+            return None
 
 
 def gather_week_data(geotab_client, fleet_dna):
@@ -234,24 +283,34 @@ def run_monday_podcast():
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    print("🎧 Running Executive Podcast Pipeline (test mode)...")
+    preview_only = "--preview" in sys.argv
 
-    cache = DuckDBCache(db_path="geopulse.db")
-    cache.initialize()
-    client = GeotabClient(db_cache=cache)
-    client.authenticate()
-    fleet_dna = FleetDNA(client, cache)
-    llm_provider = LLMProvider(db_cache=cache)
+    if preview_only:
+        print("🎧 Running Executive Podcast Pipeline (preview mode)...")
+        cache = DuckDBCache(db_path="geopulse.db")
+        cache.initialize()
+        client = GeotabClient(db_cache=cache)
+        client.authenticate()
+        fleet_dna = FleetDNA(client, cache)
+        llm_provider = LLMProvider(db_cache=cache)
 
-    week_data = gather_week_data(client, fleet_dna)
-    print(f"\n📊 Week {week_data['week_number']} Data:")
-    print(f"   Vehicles: {week_data['total_vehicles']}")
-    print(f"   Avg deviation: {week_data['avg_deviation_score']}")
-    print(f"   Events (24h): {week_data['total_events_24h']}")
+        week_data = gather_week_data(client, fleet_dna)
+        print(f"\n📊 Week {week_data['week_number']} Data:")
+        print(f"   Vehicles: {week_data['total_vehicles']}")
+        print(f"   Avg deviation: {week_data['avg_deviation_score']}")
+        print(f"   Events (24h): {week_data['total_events_24h']}")
 
-    print(f"\n🎙️ Generating podcast script...")
-    script = generate_podcast_script(week_data, llm_provider)
-    print(f"   Script ({len(script)} chars):")
-    print(f"   {script[:300]}...")
+        print(f"\n🎙️ Generating podcast script...")
+        script = generate_podcast_script(week_data, llm_provider)
+        print(f"   Script ({len(script)} chars):")
+        print(f"   {script[:300]}...")
 
-    cache.close()
+        cache.close()
+    else:
+        print("🎧 Running Executive Podcast Pipeline (full run)...")
+        result = run_monday_podcast()
+        audio_path = result.get("audio_path")
+        if audio_path and os.path.exists(audio_path):
+            print(f"✅ Podcast audio generated: {audio_path}")
+        else:
+            print("⚠️ Podcast script generated, but no audio file was produced. Check TTS credentials.")

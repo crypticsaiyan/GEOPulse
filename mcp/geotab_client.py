@@ -11,6 +11,7 @@ Functions:
     get_live_events(from_version) -> exception events (no cache)
     get_driver_trips(driver_id, days_back) -> trip history (cached 1hr)
     get_driver_exceptions(driver_id, days_back) -> exceptions (cached 1hr)
+    get_active_faults() -> fault codes (cached 5min)
     get_all_drivers() -> driver list (cached 10min)
     get_all_devices() -> device list (cached 10min)
     create_group(name, vehicle_ids) -> group id
@@ -369,6 +370,97 @@ class GeotabClient:
             })
         return formatted
 
+    def get_active_faults(self):
+        """Get currently active fault codes. Cached 5min.
+
+        Filters to faultState=Active so only live faults are returned.
+        Deduplicates by (device_id, diagnostic) keeping the most recent
+        occurrence — prevents the same repeated GoDevice fault flooding
+        the results with identical entries.
+        """
+        now = datetime.now(timezone.utc)
+        from_date = (now - timedelta(days=7)).isoformat()
+
+        params = {
+            "typeName": "FaultData",
+            "search": {
+                "fromDate": from_date,
+                "toDate": now.isoformat(),
+                "faultState": "Active",   # only currently active faults
+            },
+            "resultsLimit": 500,  # fetch more so dedup has good coverage
+        }
+
+        try:
+            faults = self._cached_call("active_faults", 300, "Get", params)
+        except Exception as e:
+            logger.warning(f"FaultData query failed (may not be available in demo DB): {e}")
+            return []
+
+        device_map = self._build_device_map()
+
+        # Deduplicate: keep only the most recent event per (device, diagnostic)
+        # Raw faults are typically newest-first from the API; use a dict to retain
+        # the first (most recent) occurrence of each unique key.
+        seen = {}
+        for f in (faults or []):
+            device_id = f.get("device", {}).get("id", "")
+            raw_diagnostic = f.get("diagnostic", "")
+            if isinstance(raw_diagnostic, dict):
+                diag_key = raw_diagnostic.get("id") or raw_diagnostic.get("name") or ""
+            else:
+                diag_key = str(raw_diagnostic or "")
+            dedup_key = f"{device_id}|{diag_key}"
+            if dedup_key not in seen:
+                seen[dedup_key] = f
+
+        formatted = []
+        for f in seen.values():
+            device_id = f.get("device", {}).get("id", "")
+
+            raw_code = f.get("code", "")
+            if isinstance(raw_code, dict):
+                code = raw_code.get("name") or raw_code.get("id") or raw_code.get("value") or ""
+            else:
+                code = str(raw_code or "")
+
+            raw_source = f.get("source", "")
+            if isinstance(raw_source, dict):
+                source = raw_source.get("name") or raw_source.get("id") or ""
+            else:
+                source = str(raw_source or "")
+
+            raw_failure_mode = f.get("failureMode", "")
+            if isinstance(raw_failure_mode, dict):
+                failure_mode = raw_failure_mode.get("name") or raw_failure_mode.get("id") or ""
+            else:
+                failure_mode = str(raw_failure_mode or "")
+
+            raw_diagnostic = f.get("diagnostic", "")
+            if isinstance(raw_diagnostic, dict):
+                diagnostic = raw_diagnostic.get("name") or raw_diagnostic.get("id") or ""
+            else:
+                diagnostic = str(raw_diagnostic or "")
+
+            # Prefer diagnostic name (most human-readable) when failure_mode is
+            # a generic sentinel like "NoFailureModeId" or empty.
+            _fm_clean = failure_mode.replace("NoFailureModeId", "").strip()
+            fault_label = diagnostic or _fm_clean or code or source or f.get("id", "")
+
+            formatted.append({
+                "id": f.get("id", ""),
+                "device_id": device_id,
+                "device_name": device_map.get(device_id, "Unknown"),
+                "code": code,
+                "timestamp": str(f.get("dateTime", "")),
+                "source": source,
+                "failure_mode": failure_mode,
+                "diagnostic": diagnostic,
+                "fault_label": fault_label,
+                "fault_state": str(f.get("faultState", "Active")),
+            })
+        return formatted
+
     def get_all_drivers(self):
         """Get all drivers (User with isDriver=True). Falls back to all users in demo DBs."""
         # Try isDriver first
@@ -558,6 +650,10 @@ if __name__ == "__main__":
         # Test live events
         events = client.get_live_events()
         print(f"   📡 Events (24h): {len(events['events'])}")
+
+        # Test faults (may be empty in demo DB)
+        faults = client.get_active_faults()
+        print(f"   🔧 Active faults: {len(faults)}")
 
     except Exception as e:
         print(f"❌ Geotab test failed: {e}")

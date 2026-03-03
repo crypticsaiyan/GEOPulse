@@ -4,7 +4,23 @@
 
 > GEOPulse reads your Geotab fleet data through an MCP server, builds a behavioral fingerprint for every driver using 90 days of history, then broadcasts **three personalized intelligence streams** — a weekly driver coaching clip, a live sportscaster dashboard, and a Monday executive podcast — so that every person in your organization hears their fleet in their own format, on their own schedule.
 
-<!-- [▶ Watch the 3-Minute Demo](link-to-demo-video) -->
+[▶ Watch the 3-Minute Demo](./demo/GEOPulse-3min-demo.mp4)
+
+Quick submission assets:
+- [3-Minute Video Script](./DEMO_VIDEO_SCRIPT.md)
+- [README Walkthrough Script](./README_WALKTHROUGH_SCRIPT.md)
+- [Prompts Used While Vibe Coding](./PROMPTS_USED_WHILE_VIBE_CODING.md)
+- [Architecture Deep-Dive](./ARCHITECTURE.md)
+
+---
+
+## 🎬 Demo Submission Assets
+
+- **Video script:** [DEMO_VIDEO_SCRIPT.md](./DEMO_VIDEO_SCRIPT.md)
+- **README walkthrough script:** [README_WALKTHROUGH_SCRIPT.md](./README_WALKTHROUGH_SCRIPT.md)
+- **Prompt library:** [PROMPTS_USED_WHILE_VIBE_CODING.md](./PROMPTS_USED_WHILE_VIBE_CODING.md)
+- **Architecture deep-dive:** [ARCHITECTURE.md](./ARCHITECTURE.md)
+- **Tip:** Keep the video exactly 3:00 and use real demo-database names/vehicle IDs from your run.
 
 ---
 
@@ -32,7 +48,7 @@
     └────────┬─────────┘ └───────┬─────────┘ └──────┬──────┘
              │                   │                   │
     ┌────────▼───────────────────▼───────────────────▼──────┐
-    │              MCP Server (10 Tools)                     │
+    │              MCP Server (9 Tools)                      │
     │  The AI Brain — Claude chains tools to answer queries  │
     └──────┬──────────────────┬────────────────────┬────────┘
            │                  │                    │
@@ -47,13 +63,36 @@
 
 ---
 
+## 📸 Screenshots
+
+> Add screenshots to a `screenshots/` folder and update the paths below.
+
+### Manager Dashboard — Live Map & Sportscaster
+![Manager Dashboard](./screenshots/dashboard-live-map.png)
+
+### Driver Feed — Personalized Coaching Email
+![Driver Feed Email](./screenshots/driver-feed-email.png)
+
+### FleetDNA Anomaly Panel
+![FleetDNA Anomaly Panel](./screenshots/fleetdna-anomaly-panel.png)
+
+### Executive Podcast — Monday Morning Briefing
+![Executive Podcast](./screenshots/executive-podcast.png)
+
+### Ace AI Chat — Natural Language Fleet Queries
+![Ace AI Chat](./screenshots/ace-ai-chat.png)
+
+---
+
 ## ✨ Features
 
 ### 🧬 FleetDNA — Behavioral Fingerprinting
-- Builds a 90-day statistical baseline per driver (speed, braking, idle, distance, routes)
-- Compares today to *their own normal* using Z-score deviations
-- Deviation scale: 0 (normal) → 100 (completely anomalous)
+- Builds a 90-day statistical baseline per driver **or per vehicle** (auto-detects demo databases with no real driver IDs)
+- 7 weighted metrics: `avg_speed` (×1.5), `max_speed` (×2.0), `trip_distance` (×1.0), `trip_duration` (×0.8), `idle_ratio` (×1.2), `daily_distance` (×1.0), `daily_trips` (×0.5)
+- Compares today to *their own normal* using Z-score per metric, combined into a weighted deviation score
+- Scale: 0 (perfectly normal) → 100 (completely anomalous)
 - Detects stress, fatigue, or medical events — not just rule violations
+- Persists baselines and daily scores in DuckDB for trend analysis and weekly delta reporting
 
 ### 🎙️ Frequency 1: Driver Feed (Friday 5 PM)
 - Personalized 90-second audio coaching clip per driver
@@ -61,58 +100,98 @@
 - Fleet rank badge, coaching tips, audio play button
 
 ### 📡 Frequency 2: Manager Dashboard (Live)
-- Dark-themed real-time map with color-coded vehicle markers
-- Live sportscaster audio commentary (ESPN-style, AI-generated)
-- Event ticker with real-time exception events
-- FleetDNA anomaly panel with pulsing alerts
-- Detail drawer with radar chart (Today vs Normal)
-- One-click Welfare Check → creates Geotab Group instantly
+- Dark-themed real-time map — **Leaflet 1.9.4** + CartoDB Dark Matter tiles + `leaflet.heat` heatmap plugin (no API key required)
+- Live sportscaster audio commentary (ESPN-style, Gemini-generated + Google Cloud TTS, auto-refreshes every 60s)
+- Event ticker with real-time exception events (GetFeed streaming, per-vehicle deduplication)
+- FleetDNA anomaly panel with pulsing alerts + deviation score badges
+- Detail drawer: radar chart (Today vs Normal), metric breakdown, coaching tip
+- One-click Welfare Check → creates Geotab Group instantly (live write-back to MyGeotab)
+- **Ace AI chat**: natural-language fleet questions answered live via Geotab Ace (`GetAceResults`)
+- **Report generator**: one-click AI incident or coaching report in structured Markdown
+- **Trip replay**: GPS breadcrumb animation for any vehicle's most recent trip
 
 ### 🎧 Frequency 3: Executive Podcast (Monday 5 AM)
 - 5-minute two-host podcast (Alex & Jamie)
 - Uses real fleet data: vehicle numbers, driver names, percentages
 - Structure: Cold open → Top story → Safety dive → Driver spotlight → Prediction
 
-### 🤖 MCP Server (10 Tools)
+### 🤖 MCP Server (9 Tools)
 AI-chainable tools that let Claude reason about your fleet:
 
-| Tool | Purpose |
-|------|---------|
-| `get_fleet_overview` | All vehicles + live positions + deviation scores |
-| `get_driver_dna` | Full baseline + today's score + weekly delta |
-| `find_anomalous_drivers` | Drivers above deviation threshold, ranked |
-| `get_fuel_analysis` | Fuel consumption ranked + idle correlation |
-| `get_fault_report` | Active faults with severity + patterns |
-| `get_safety_events` | Exception events grouped by driver + type |
-| `query_fleet_data` | Custom SQL against DuckDB analytics cache |
-| `create_group` | Write-back: create Geotab group + assign vehicles |
-| `create_coaching_rule` | Write-back: create exception rule for driver |
-| `generate_fleet_narrative` | LLM narrative for any audience |
+| # | Tool | Purpose |
+|---|------|---------|
+| 1 | `get_fleet_overview` | All vehicles + live positions + FleetDNA deviation scores |
+| 2 | `get_driver_dna` | Full 90-day baseline + today's score + weekly delta for one entity |
+| 3 | `find_anomalous_drivers` | All entities above a deviation threshold, ranked worst-first |
+| 4 | `get_fuel_analysis` | Distance/idle rankings — identifies fuel-inefficient routes |
+| 5 | `get_safety_events` | Exception events grouped by driver + rule type for last N hours |
+| 6 | `query_fleet_data` | Freeform SQL against DuckDB — trips, baselines, anomaly log |
+| 7 | `create_group` | Write-back: Add Geotab Group + assign vehicles in one call |
+| 8 | `create_coaching_rule` | Write-back: create exception alert rule for a specific driver |
+| 9 | `generate_fleet_narrative` | Gemini narrative scoped to `driver`, `manager`, or `executive` audience |
+
+### 🗣️ Ace AI Integration
+- Natural-language queries routed to Geotab Ace API (`GetAceResults`)
+- Uses async create-chat → send-prompt → poll pattern via `ace_client.py`
+- Falls back to local Gemini with cached fleet context when Ace is unavailable
+- Exposed at `/api/ace-query` (dashboard chat panel) and as MCP context
+
+### 📋 Report Generation
+- `/api/generate-report` produces structured Markdown incident or coaching reports
+- Source data: entity's 90-day baseline + today's Z-scores + recent exception events
+- Two modes: `incident` (risk assessment table, contributing factors) and `coaching` (positive reinforcement, action items)
+
+### 🔁 Trip Replay
+- `/api/trip-replay/{device_id}` fetches GPS `LogRecord` breadcrumbs for the latest trip
+- Dashboard animates vehicle movement over the route with speed-based colour coding
 
 ### ✍️ Write-Back Automation
 GEOPulse doesn't just read — it writes back to Geotab:
 - **Morning analysis** → "Needs Attention" + "Welfare Check" groups
 - **Friday driver feed** → "Week N Champions" group + coaching rules for bottom performers
-- **Monday podcast** → Archive last week's groups
-- **Real-time** → Instant welfare check group on anomaly flag
+- **Monday podcast** → Archive previous week's groups
+- **Real-time** → Instant welfare-check group created from the dashboard anomaly panel
 
 ---
 
 ## 🔧 Geotab API Calls
 
-| Method | typeName | Filters | Returns |
-|--------|----------|---------|---------|
-| `Get` | `DeviceStatusInfo` | — | Live positions, speed, bearing, driving state |
-| `GetFeed` | `ExceptionEvent` | `fromVersion` | Streaming events with version token |
-| `Get` | `Trip` | `fromDate`, `deviceSearch`/`driverSearch` | Trip metrics: distance, speed, duration, idle |
-| `Get` | `ExceptionEvent` | `fromDate`, `driverSearch` | Per-driver exception history |
-| `Get` | `FaultData` | `activeFrom = now - 7d` | Active faults with codes and source |
-| `Get` | `Driver` / `User` | — | All drivers list |
-| `Get` | `Device` | — | All vehicles list |
-| `Add` | `Group` | `name`, `parent` | Creates group, returns ID |
-| `Set` | `Device` | `groups` | Assigns vehicles to groups |
-| `Add` | `Rule` | `name`, `conditions` | Creates exception rule |
-| OData | `VehicleKpi_Daily` | `$filter=date` | Daily KPI data via Data Connector |
+| Method | typeName / Endpoint | Key Filters | Used In |
+|--------|---------------------|-------------|---------|
+| `Authenticate` | — | database, userName, password | `geotab_client.py` |
+| `Get` | `DeviceStatusInfo` | — | `get_live_positions()` — live positions, speed, bearing |
+| `GetFeed` | `ExceptionEvent` | `fromVersion` | `get_live_events()` — streaming events + version token |
+| `Get` | `ExceptionEvent` | `fromDate`, `userSearch` | `get_driver_exceptions()` — per-entity exception history |
+| `Get` | `Trip` | `fromDate`, `deviceSearch` | `get_driver_trips()` — trip metrics (distance, speed, idle) |
+| `Get` | `LogRecord` | `deviceSearch`, `fromDate`, `toDate` | `trip_replay()` endpoint — GPS breadcrumbs |
+| `Get` | `FaultData` | `faultState: Active`, `fromDate` | `get_active_faults()` — deduped active faults per device |
+| `Get` | `User` | `isDriver: true` → fallback to all | `get_all_drivers()` — driver list (demo DB safe) |
+| `Get` | `Device` | — | `get_all_devices()` — all vehicles |
+| `Add` | `Group` | `name`, `parent` | `create_group()` — welfare check / champions groups |
+| `Add` | `Rule` | `name`, `condition` | `create_rule()` — coaching exception rules |
+| `GetAceResults` | — | `functionName`, `functionParameters` | `ace_client.py` — natural-language SQL via Ace AI |
+| OData | `VehicleKpi_Daily` | `$filter=Date ge …` | `get_kpi_data()` — weekly KPI aggregates via Data Connector |
+
+---
+
+## 🌐 FastAPI Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/` | Landing page (serves `index.html`) |
+| `GET` | `/dashboard` | Dashboard static files |
+| `GET` | `/api/live-positions` | All vehicles enriched with FleetDNA deviation scores |
+| `GET` | `/api/live-events` | Exception event feed with version token for polling |
+| `GET` | `/api/driver/{entity_id}` | Full FleetDNA profile: baseline + today's score + weekly delta |
+| `GET` | `/api/anomalies?threshold=60` | All entities above the deviation threshold |
+| `POST` | `/api/generate-commentary` | Gemini sportscaster narration + Google TTS audio (base64 MP3) |
+| `POST` | `/api/tts` | Text → speech via Google Cloud TTS (Journey-D default, Neural2-D fallback) |
+| `POST` | `/api/write-back/group` | Create a Geotab group + assign vehicle IDs live |
+| `POST` | `/api/send-mail` | Manager brief email with optional audio attachment via Gmail |
+| `POST` | `/api/ace-query` | Natural-language question → Geotab Ace (falls back to Gemini) |
+| `POST` | `/api/generate-report` | AI incident or coaching report in Markdown |
+| `GET` | `/api/trip-replay/{device_id}` | GPS breadcrumbs from `LogRecord` for trip animation |
+| `GET` | `/health` | Server status, LLM provider, Ace availability |
 
 ---
 
@@ -195,16 +274,16 @@ Audience-specific system prompts:
 
 | # | Product | Exact Role in GEOPulse |
 |---|---------|----------------------|
-| 1 | **Gemini Flash** | All LLM generation: driver scripts, commentary, briefs, narratives |
-| 2 | **Gemini Pro** | Executive podcast script generation (deeper reasoning) |
-| 3 | **Google Cloud TTS** | Driver audio clips (Neural2-D), sportscaster (Neural2-J), podcast (Neural2-J + Neural2-F dual-voice) |
-| 4 | **Google Maps** | Dark-mode fleet map with directional markers, heatmap layer |
-| 5 | **Gmail API** | Driver weekly emails, manager morning briefs |
-| 6 | **Google Sheets** | Fleet Intelligence Dashboard — weekly KPI tracking |
-| 7 | **Google Sites** | Podcast player page — executives listen here |
-| 8 | **Google Drive** | Podcast script storage and sharing |
-| 9 | **Google Cloud** | Project infrastructure, service accounts, IAM |
-| 10 | **Google Fonts** | Inter + JetBrains Mono for dashboard UI |
+| 1 | **Gemini 2.0 Flash** | All LLM generation: driver scripts, sportscaster commentary, manager briefs, narratives |
+| 2 | **Gemini 2.0 Flash (podcast)** | Executive podcast script — same model, higher token budget, richer prompting |
+| 3 | **Google Cloud TTS** | Driver clips (Neural2-D), sportscaster (Journey-D, Neural2-D fallback), podcast dual-voice (Neural2-J + Neural2-F) |
+| 4 | **Gmail API** | Driver weekly coaching emails + manager daily morning briefs (OAuth2 + SMTP fallback) |
+| 5 | **Google Sheets API** | Fleet Intelligence Dashboard — weekly KPI rows appended after each podcast episode |
+| 6 | **Google Drive API** | Podcast MP3 + script stored per-episode; shared link embedded in executive email |
+| 7 | **Google Cloud IAM** | Service account credentials for TTS, Sheets, and Drive integrations |
+| 8 | **Google Fonts** | Inter (UI text) + JetBrains Mono (metric values) loaded in dashboard |
+
+> **Not Google:** The fleet map uses open-source **Leaflet 1.9.4** with CartoDB Dark Matter tiles + `leaflet.heat` heatmap plugin. No API key required.
 
 ---
 
@@ -239,8 +318,8 @@ Required `.env` variables:
 | `GEOTAB_PASSWORD` | ✅ | Your Geotab password |
 | `GEOTAB_SERVER` | ✅ | `my.geotab.com` |
 | `GEMINI_API_KEY` | ✅ (or use Ollama) | Google AI Studio |
-| `GOOGLE_MAPS_API_KEY` | Optional | Google Cloud Console |
-| `GOOGLE_APPLICATION_CREDENTIALS` | Optional | For TTS/Sheets/Sites |
+| `GOOGLE_MAPS_API_KEY` | Unused | `map.js` exists but is not loaded — Leaflet runs without a key |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Optional | For TTS, Sheets, and Drive |
 | `LLM_PROVIDER` | Optional | `gemini` (default) or `ollama` |
 
 ### 3. Test Geotab connection
@@ -297,11 +376,14 @@ python -m scheduler.cron_jobs
 ```
 GEOPulse/
 ├── mcp/                          # The AI Brain
-│   ├── mcp_server.py             # MCP server — 10 tools for Claude
-│   ├── geotab_client.py          # Geotab API wrapper (9 functions + cache)
+│   ├── mcp_server.py             # MCP server — 9 tools for Claude
+│   ├── geotab_client.py          # Geotab API wrapper (10 functions + cache)
 │   ├── fleetdna.py               # Behavioral fingerprinting engine
 │   ├── duckdb_cache.py           # Analytics cache (7 tables)
 │   ├── llm_provider.py           # Gemini/Ollama abstraction
+│   ├── ace_client.py             # Geotab Ace AI query client
+│   ├── google_publisher.py       # Sheets + Drive publishing
+│   ├── email_sender.py           # Gmail API + SMTP fallback
 │   └── writeback_manager.py      # Centralized Geotab write-backs
 ├── addin/                        # Manager Dashboard (MyGeotab Add-In)
 │   ├── config.json               # Add-In manifest
@@ -309,10 +391,12 @@ GEOPulse/
 │   ├── css/dashboard.css         # Dark glassmorphism theme
 │   └── js/
 │       ├── main.js               # Entry point + live polling
-│       ├── map.js                # Fleet map + markers
+│       ├── map.js                # Google Maps alternative (unused — not loaded)
 │       ├── sportscaster.js       # Live commentary engine
 │       ├── ticker.js             # Event ticker
 │       └── anomaly.js            # FleetDNA anomaly panel
+├── dashboard/                    # Mirror of addin/ used by FastAPI server
+│   └── (same structure as addin/)
 ├── frequencies/                  # Output Pipelines
 │   ├── driver_feed.py            # Frequency 1: Friday driver audio + email
 │   ├── manager_email.py          # Frequency 2b: Daily manager morning brief
@@ -337,7 +421,7 @@ GEOPulse/
 |-------|-------------------|-----------------|
 | 🤖 **The Innovator ($5K)** | Technical AI creativity | FleetDNA personal baselines + visible MCP tool chains |
 | 💥 **The Disruptor ($2.5K)** | Most surprising idea | Live sportscaster audio — nobody else submits audio |
-| 🔵 **Google Tools ($2.5K)** | Best use of Google products | 10 products, TTS dual-voice podcast, Gemini reasoning |
+| 🔵 **Google Tools ($2.5K)** | Best use of Google products | 8 products, TTS dual-voice podcast, Gemini reasoning |
 | 🤝 **Collaborative ($2.5K)** | Community activity | Open-source, shared prompts, daily progress posts |
 
 ---

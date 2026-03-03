@@ -22,15 +22,38 @@ import json
 import asyncio
 import logging
 from datetime import date
+import sys
+import os
 
-# pip's mcp library is now directly importable (no naming collision)
+# Ensure pip's MCP SDK is imported, not the local ./mcp package.
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_original_sys_path = list(sys.path)
+_cwd = os.path.abspath(os.getcwd())
+
+_removed_local_mcp_modules = {}
+for mod_name, mod in list(sys.modules.items()):
+    if mod_name == "mcp" or mod_name.startswith("mcp."):
+        mod_file = getattr(mod, "__file__", "") or ""
+        if mod_file.startswith(os.path.join(PROJECT_ROOT, "mcp")):
+            _removed_local_mcp_modules[mod_name] = mod
+            del sys.modules[mod_name]
+
+sys.path = [
+    p for p in sys.path
+    if p != PROJECT_ROOT and not (p == "" and _cwd == PROJECT_ROOT)
+]
+
 from mcp.server import Server as MCPServer
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path = _original_sys_path
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+for mod_name, mod in _removed_local_mcp_modules.items():
+    sys.modules.setdefault(mod_name, mod)
+
 from core.duckdb_cache import DuckDBCache
 from core.geotab_client import GeotabClient
 from core.fleetdna import FleetDNA

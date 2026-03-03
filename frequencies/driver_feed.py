@@ -13,6 +13,9 @@ import sys
 import json
 import hashlib
 import logging
+import base64
+import requests
+import re as _re
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -61,16 +64,15 @@ def generate_driver_script(driver_name, weekly_delta, exceptions, llm_provider):
 
 def generate_driver_audio(script_text, driver_name, db_cache=None):
     """Generate TTS audio from script. Returns file path or None."""
-    provider = os.getenv("LLM_PROVIDER", "gemini")
-
-    # Skip TTS if using Ollama (local mode)
-    if provider == "ollama":
-        logger.info(f"Ollama mode: skipping TTS for {driver_name}")
+    clean_text = _re.sub(r'\*+|#+|`+|_{2,}|~+', '', script_text or '')
+    clean_text = _re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', clean_text)
+    clean_text = _re.sub(r'\s+', ' ', clean_text).strip()
+    if not clean_text:
         return None
 
     # Check TTS cache
     if db_cache:
-        cached = db_cache.get_tts_cache(script_text)
+        cached = db_cache.get_tts_cache(clean_text)
         if cached:
             logger.info(f"TTS cache hit for {driver_name}")
             return cached
@@ -80,7 +82,7 @@ def generate_driver_audio(script_text, driver_name, db_cache=None):
 
         client = texttospeech.TextToSpeechClient()
 
-        synthesis_input = texttospeech.SynthesisInput(text=script_text)
+        synthesis_input = texttospeech.SynthesisInput(text=clean_text)
         voice = texttospeech.VoiceSelectionParams(
             language_code="en-US",
             name="en-US-Neural2-D",  # Warm male voice
@@ -105,14 +107,55 @@ def generate_driver_audio(script_text, driver_name, db_cache=None):
             f.write(response.audio_content)
 
         if db_cache:
-            db_cache.set_tts_cache(script_text, filepath)
+            db_cache.set_tts_cache(clean_text, filepath)
 
         logger.info(f"Generated audio: {filepath}")
         return filepath
 
     except Exception as e:
-        logger.warning(f"TTS generation failed for {driver_name}: {e}")
-        return None
+        logger.warning(f"Driver TTS (ADC) failed for {driver_name}, trying API key fallback: {e}")
+
+        api_key = os.getenv("GOOGLE_TTS_API_KEY") or os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            logger.warning(f"Driver TTS fallback unavailable for {driver_name}: no GOOGLE_TTS_API_KEY or GEMINI_API_KEY")
+            return None
+
+        try:
+            payload = {
+                "input": {"text": clean_text},
+                "voice": {"languageCode": "en-US", "name": "en-US-Neural2-D"},
+                "audioConfig": {
+                    "audioEncoding": "MP3",
+                    "speakingRate": 0.95,
+                    "pitch": -1.0,
+                },
+            }
+            resp = requests.post(
+                f"https://texttospeech.googleapis.com/v1/text:synthesize?key={api_key}",
+                json=payload,
+                timeout=(5, 35),
+            )
+            resp.raise_for_status()
+            audio_b64 = resp.json().get("audioContent")
+            if not audio_b64:
+                return None
+
+            os.makedirs("audio", exist_ok=True)
+            week_num = datetime.now().strftime("%W")
+            safe_name = driver_name.replace(" ", "_").lower()
+            filepath = f"audio/{safe_name}_week{week_num}.mp3"
+
+            with open(filepath, "wb") as f:
+                f.write(base64.b64decode(audio_b64))
+
+            if db_cache:
+                db_cache.set_tts_cache(clean_text, filepath)
+
+            logger.info(f"Generated audio (API key): {filepath}")
+            return filepath
+        except Exception as fallback_error:
+            logger.warning(f"Driver TTS fallback failed for {driver_name}: {fallback_error}")
+            return None
 
 
 def generate_driver_email_html(driver_name, weekly_delta, audio_url=None, rank_info=None):
@@ -238,22 +281,30 @@ def run_friday_driver_feed():
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    print("🎙️ Running Driver Feed Pipeline (test mode — first 3 entities)...")
+    preview_only = "--preview" in sys.argv
 
-    cache = DuckDBCache(db_path="geopulse.db")
-    cache.initialize()
-    client = GeotabClient(db_cache=cache)
-    client.authenticate()
-    fleet_dna = FleetDNA(client, cache)
-    llm_provider = LLMProvider(db_cache=cache)
+    if preview_only:
+        print("🎙️ Running Driver Feed Pipeline (preview mode — first 3 entities)...")
 
-    entities = fleet_dna.get_entities()[:3]
-    for entity in entities:
-        print(f"\n📻 {entity['name']}:")
-        weekly = fleet_dna.get_weekly_delta(entity["id"])
-        script = generate_driver_script(entity["name"], weekly, [], llm_provider)
-        print(f"   Script ({len(script)} chars):")
-        print(f"   {script[:200]}...")
-        print(f"   Audio: {'skipped (Ollama mode)' if os.getenv('LLM_PROVIDER') == 'ollama' else 'would generate TTS'}")
+        cache = DuckDBCache(db_path="geopulse.db")
+        cache.initialize()
+        client = GeotabClient(db_cache=cache)
+        client.authenticate()
+        fleet_dna = FleetDNA(client, cache)
+        llm_provider = LLMProvider(db_cache=cache)
 
-    cache.close()
+        entities = fleet_dna.get_entities()[:3]
+        for entity in entities:
+            print(f"\n📻 {entity['name']}:")
+            weekly = fleet_dna.get_weekly_delta(entity["id"])
+            script = generate_driver_script(entity["name"], weekly, [], llm_provider)
+            print(f"   Script ({len(script)} chars):")
+            print(f"   {script[:200]}...")
+            print("   Audio: preview only (no TTS call)")
+
+        cache.close()
+    else:
+        print("🎙️ Running Driver Feed Pipeline (full run)...")
+        results = run_friday_driver_feed()
+        generated_audio = [r.get("audio") for r in results if r.get("audio")]
+        print(f"✅ Generated {len(generated_audio)} driver audio file(s)")
