@@ -45,6 +45,7 @@ logger = logging.getLogger(__name__)
 # Paths
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LANDING_PATH = os.path.join(BASE_DIR, "index.html")
+LANDING_IMAGE_PATH = os.path.join(BASE_DIR, "geotab.png")
 _dashboard_candidate = os.path.join(BASE_DIR, "dashboard")
 _addin_candidate = os.path.join(BASE_DIR, "addin")
 DASHBOARD_DIR = _dashboard_candidate if os.path.exists(os.path.join(_dashboard_candidate, "index.html")) else _addin_candidate
@@ -131,6 +132,14 @@ async def serve_favicon():
     if os.path.exists(DASHBOARD_ICON_PATH):
         return FileResponse(DASHBOARD_ICON_PATH)
     raise HTTPException(status_code=404, detail="Favicon not found")
+
+
+@app.get("/geotab.png")
+async def serve_landing_image():
+    """Serve landing page hero screenshot image."""
+    if os.path.exists(LANDING_IMAGE_PATH):
+        return FileResponse(LANDING_IMAGE_PATH)
+    raise HTTPException(status_code=404, detail="Landing image not found")
 
 
 # === Request Models ===

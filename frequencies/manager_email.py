@@ -11,6 +11,7 @@ import os
 import sys
 import json
 import logging
+import html as _html
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -52,49 +53,121 @@ def generate_manager_email_html(brief_text, fleet_summary):
     """Generate the manager brief HTML email."""
     today = datetime.now().strftime("%A, %B %d")
 
-    alert_cards = ""
     anomalies = fleet_summary.get("anomalies", [])
-    for a in anomalies[:3]:
-        color = "#F85149" if a["deviation_score"] > 70 else "#D29922"
+    top_rankings = fleet_summary.get("top_rankings", [])
+
+    critical_count = sum(1 for a in anomalies if a.get("deviation_score", 0) >= 70)
+    moderate_count = sum(1 for a in anomalies if 40 <= a.get("deviation_score", 0) < 70)
+
+    safe_brief = _html.escape((brief_text or "").strip()).replace("\n", "<br>")
+
+    alert_cards = ""
+    for index, anomaly in enumerate(anomalies[:5], 1):
+        score = anomaly.get("deviation_score", 0)
+        level = "Critical" if score >= 70 else "Moderate"
+        color = "#F85149" if score >= 70 else "#D29922"
+        name = _html.escape(str(anomaly.get("name", "Unknown Vehicle")))
+        anomaly_type = _html.escape(str(anomaly.get("anomaly_type", "behavior"))).replace("_", " ").title()
         alert_cards += f"""
-        <div style="background: #1C2128; border-left: 3px solid {color}; padding: 12px; margin: 8px 0; border-radius: 0 6px 6px 0;">
-            <strong style="color: {color};">{a['name']}</strong>
-            <span style="color: #7D8590; font-size: 12px;"> — {a['anomaly_type']} · {a['deviation_score']}/100</span>
+        <tr>
+            <td style="padding: 10px 8px; border-bottom: 1px solid #2D333B; color: #E6EDF3; font-size: 13px;">{index}. {name}</td>
+            <td style="padding: 10px 8px; border-bottom: 1px solid #2D333B; color: #7D8590; font-size: 12px;">{anomaly_type}</td>
+            <td style="padding: 10px 8px; border-bottom: 1px solid #2D333B; color: {color}; font-weight: 700; font-size: 12px;">{score}/100</td>
+            <td style="padding: 10px 8px; border-bottom: 1px solid #2D333B; color: {color}; font-size: 12px;">{level}</td>
+        </tr>"""
+
+    ranking_cards = ""
+    for rank_index, ranked in enumerate(top_rankings[:3], 1):
+        score = ranked.get("deviation_score", 0)
+        color = "#F85149" if score >= 70 else "#D29922" if score >= 50 else "#3FB950"
+        name = _html.escape(str(ranked.get("name", "Unknown Vehicle")))
+        anomaly_type = _html.escape(str(ranked.get("anomaly_type", "normal")).replace("_", " ").title())
+        ranking_cards += f"""
+        <div style="background: #11161C; border: 1px solid #30363D; border-radius: 10px; padding: 12px; margin: 8px 0;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div style="font-size: 13px; color: #E6EDF3;"><strong>#{rank_index}</strong> {name}</div>
+                <div style="font-size: 12px; color: {color}; font-weight: 700;">{score}/100</div>
+            </div>
+            <div style="font-size: 11px; color: #7D8590; margin-top: 6px;">Primary signal: {anomaly_type}</div>
         </div>"""
 
+    if critical_count > 0:
+        focus_text = f"Prioritize {critical_count} critical vehicles first. Trigger coaching + maintenance checks today."
+    elif moderate_count > 0:
+        focus_text = f"No critical units. Focus on {moderate_count} moderate-risk vehicles to prevent escalation."
+    else:
+        focus_text = "Fleet is stable. Focus on preventive coaching and monitor live events for change." 
+
     html = f"""
-    <div style="background: #0D1117; color: #E6EDF3; font-family: 'Inter', -apple-system, sans-serif; padding: 32px; max-width: 600px; margin: 0 auto;">
-        <div style="background: #161B22; border: 1px solid #30363D; border-radius: 12px; padding: 24px;">
-            <div style="text-align: center; margin-bottom: 20px;">
-                <span style="font-size: 24px;">📡</span>
-                <h1 style="font-size: 20px; margin: 8px 0 4px;">Fleet Morning Brief</h1>
-                <p style="color: #7D8590; font-size: 13px; margin: 0;">{today}</p>
+    <div style="background: #0D1117; color: #E6EDF3; font-family: 'Inter', -apple-system, sans-serif; padding: 28px; max-width: 680px; margin: 0 auto;">
+        <div style="background: linear-gradient(180deg, #161B22 0%, #121820 100%); border: 1px solid #30363D; border-radius: 14px; padding: 24px; box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <div>
+                    <div style="font-size: 11px; color: #7D8590; text-transform: uppercase; letter-spacing: 1px;">GEOPulse Daily Digest</div>
+                    <h1 style="font-size: 22px; margin: 6px 0 0;">Fleet Morning Brief</h1>
+                </div>
+                <div style="font-size: 12px; color: #7D8590;">{today}</div>
             </div>
 
-            <div style="display: flex; justify-content: space-around; text-align: center; margin: 20px 0; padding: 16px; background: #0D1117; border-radius: 8px;">
-                <div>
+            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 18px 0;">
+                <div style="text-align: center; padding: 12px; background: #0D1117; border: 1px solid #2D333B; border-radius: 10px;">
                     <div style="font-size: 24px; font-weight: bold; color: #3FB950;">{fleet_summary.get('total_vehicles', 0)}</div>
-                    <div style="font-size: 11px; color: #7D8590;">VEHICLES</div>
+                    <div style="font-size: 11px; color: #7D8590;">ACTIVE VEHICLES</div>
                 </div>
-                <div>
+                <div style="text-align: center; padding: 12px; background: #0D1117; border: 1px solid #2D333B; border-radius: 10px;">
                     <div style="font-size: 24px; font-weight: bold; color: #F85149;">{fleet_summary.get('anomaly_count', 0)}</div>
                     <div style="font-size: 11px; color: #7D8590;">ANOMALIES</div>
                 </div>
-                <div>
+                <div style="text-align: center; padding: 12px; background: #0D1117; border: 1px solid #2D333B; border-radius: 10px;">
                     <div style="font-size: 24px; font-weight: bold; color: #D29922;">{fleet_summary.get('event_count', 0)}</div>
-                    <div style="font-size: 11px; color: #7D8590;">EVENTS</div>
+                    <div style="font-size: 11px; color: #7D8590;">LIVE EVENTS</div>
                 </div>
             </div>
 
-            {f'<h3 style="font-size: 13px; color: #7D8590; text-transform: uppercase;">⚠️ Watch List</h3>{alert_cards}' if alert_cards else ''}
-
-            <div style="margin: 20px 0; padding: 16px; background: #0D1117; border-radius: 8px; font-size: 14px; line-height: 1.6;">
-                {brief_text.replace(chr(10), '<br>')}
+            <div style="margin: 18px 0; padding: 14px; background: #0D1117; border: 1px solid #2D333B; border-radius: 10px;">
+                <div style="font-size: 12px; color: #7D8590; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px;">Priority Focus (Next 24h)</div>
+                <div style="font-size: 14px; line-height: 1.5; color: #E6EDF3;">{_html.escape(focus_text)}</div>
             </div>
 
-            <div style="border-top: 1px solid #30363D; margin-top: 20px; padding-top: 12px;">
-                <p style="font-size: 11px; color: #7D8590; text-align: center; margin: 0;">
-                    GEOPulse Fleet Intelligence · Auto-generated daily
+            {f'''
+            <div style="margin: 20px 0;">
+                <h3 style="font-size: 13px; color: #7D8590; text-transform: uppercase; letter-spacing: 1px; margin: 0 0 8px;">⚠️ Watch List</h3>
+                <div style="background: #0D1117; border: 1px solid #2D333B; border-radius: 10px; overflow: hidden;">
+                    <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse: collapse;">
+                        <thead>
+                            <tr style="background: #11161C;">
+                                <th align="left" style="padding: 10px 8px; color: #7D8590; font-size: 11px; text-transform: uppercase;">Vehicle</th>
+                                <th align="left" style="padding: 10px 8px; color: #7D8590; font-size: 11px; text-transform: uppercase;">Signal</th>
+                                <th align="left" style="padding: 10px 8px; color: #7D8590; font-size: 11px; text-transform: uppercase;">Score</th>
+                                <th align="left" style="padding: 10px 8px; color: #7D8590; font-size: 11px; text-transform: uppercase;">Risk</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {alert_cards}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            ''' if alert_cards else ''}
+
+            {f'''
+            <div style="margin: 20px 0;">
+                <h3 style="font-size: 13px; color: #7D8590; text-transform: uppercase; letter-spacing: 1px; margin: 0 0 8px;">📈 Top Vehicles to Review</h3>
+                {ranking_cards}
+            </div>
+            ''' if ranking_cards else ''}
+
+            <div style="margin: 20px 0; padding: 16px; background: #0D1117; border: 1px solid #2D333B; border-radius: 10px; font-size: 14px; line-height: 1.65;">
+                <div style="font-size: 12px; color: #7D8590; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">Manager Narrative</div>
+                {safe_brief}
+            </div>
+
+            <div style="border-top: 1px solid #30363D; margin-top: 20px; padding-top: 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;">
+                <p style="font-size: 11px; color: #7D8590; margin: 0;">
+                    GEOPulse Fleet Intelligence · Auto-generated daily at 06:30
+                </p>
+                <p style="font-size: 11px; color: #7D8590; margin: 0;">
+                    Critical: <span style="color:#F85149;">{critical_count}</span> · Moderate: <span style="color:#D29922;">{moderate_count}</span>
                 </p>
             </div>
         </div>

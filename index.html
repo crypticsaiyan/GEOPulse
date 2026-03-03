@@ -24,7 +24,7 @@
       --text-muted:    #666666;
       --accent:        #B5E853;
       --accent-glow:   rgba(181, 232, 83, 0.25);
-      --font:          'Inter', sans-serif;
+      --font:          'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
       --font-mono:     'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
       --radius:        2px;
       --transition:    all 0.3s ease;
@@ -464,32 +464,8 @@
           <div class="mockup-dot"></div>
           <div style="margin-left:auto; font-family: var(--font-mono); font-size: 10px; color: var(--text-muted);">fleet_command_interface.exe</div>
         </div>
-        <div style="padding: 40px; text-align: center; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: center; height: 300px; background: #0A0A0A; position: relative; overflow: hidden;">
-           <!-- Abstract representation of the dashboard to simulate dashboard while image is missing -->
-           <div style="position: absolute; inset: 0; background: linear-gradient(135deg, rgba(181,232,83,0.05) 0%, transparent 50%); pointer-events:none;"></div>
-           <div style="display: flex; gap: 20px; width: 100%; height: 100%;">
-              <div style="flex: 1; border: 1px solid var(--border); border-radius: 2px; background: rgba(17,17,17,0.8); display: flex; flex-direction: column;">
-                <div style="padding: 10px; border-bottom: 1px solid var(--border); font-family: var(--font-mono); font-size: 10px; color: var(--text-muted);">// LIVE BROADCAST</div>
-                <div style="flex: 1; padding: 20px; text-align: left;">
-                  <div style="height: 10px; background: rgba(181,232,83,0.2); margin-bottom: 10px; width: 80%;"></div>
-                  <div style="height: 10px; background: rgba(181,232,83,0.2); margin-bottom: 10px; width: 60%;"></div>
-                  <div style="height: 10px; background: rgba(181,232,83,0.2); margin-bottom: 10px; width: 90%;"></div>
-                  <div style="height: 10px; background: rgba(181,232,83,0.2); margin-bottom: 10px; width: 40%;"></div>
-                </div>
-              </div>
-              <div style="flex: 2; border: 1px solid var(--border); border-radius: 2px; background: rgba(10,10,10,0.8); position: relative; overflow: hidden;">
-                <div style="position: absolute; top:50%; left:50%; width: 200px; height: 200px; background: var(--accent); filter: blur(100px); opacity: 0.1; transform: translate(-50%,-50%);"></div>
-                <!-- Crosshairs -->
-                <div style="position: absolute; top: 50%; left: 0; right: 0; height: 1px; background: rgba(181,232,83,0.1);"></div>
-                <div style="position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: rgba(181,232,83,0.1);"></div>
-              </div>
-              <div style="flex: 1; border: 1px solid var(--border); border-radius: 2px; background: rgba(17,17,17,0.8); display: flex; flex-direction: column;">
-                 <div style="padding: 10px; border-bottom: 1px solid var(--border); font-family: var(--font-mono); font-size: 10px; color: var(--text-muted);">// ACE QUERY</div>
-                 <div style="flex: 1; padding: 20px; text-align: left; display: flex; flex-direction: column; justify-content: flex-end;">
-                    <div style="height: 30px; border: 1px solid var(--accent); background: rgba(181,232,83,0.05); display: flex; align-items: center; padding: 0 10px; font-family: var(--font-mono); font-size: 10px; color: var(--accent);">> System status optimal_</div>
-                 </div>
-              </div>
-           </div>
+        <div style="padding: 0; border-bottom: 1px solid var(--border); background: #0A0A0A; position: relative; overflow: hidden;">
+          <img src="/geotab.png" alt="GEOPulse dashboard preview" style="width: 100%; height: auto; display: block;">
         </div>
       </div>
     </section>
