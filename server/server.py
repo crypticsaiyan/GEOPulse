@@ -15,6 +15,7 @@ Run: uvicorn server.server:app --port 8000 --reload
 import json
 import logging
 from contextlib import asynccontextmanager
+import html as _html
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,12 +37,19 @@ from mcp.geotab_client import GeotabClient
 from mcp.fleetdna import FleetDNA
 from mcp.llm_provider import LLMProvider
 from mcp.ace_client import AceClient
+from mcp.email_sender import send_email
+from frequencies.manager_email import generate_manager_brief, generate_manager_email_html
 
 logger = logging.getLogger(__name__)
 
 # Paths
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ADDIN_DIR = os.path.join(BASE_DIR, "addin")
+LANDING_PATH = os.path.join(BASE_DIR, "index.html")
+_dashboard_candidate = os.path.join(BASE_DIR, "dashboard")
+_addin_candidate = os.path.join(BASE_DIR, "addin")
+DASHBOARD_DIR = _dashboard_candidate if os.path.exists(os.path.join(_dashboard_candidate, "index.html")) else _addin_candidate
+DASHBOARD_PATH = os.path.join(DASHBOARD_DIR, "index.html")
+DASHBOARD_ICON_PATH = os.path.join(DASHBOARD_DIR, "icon.svg")
 
 # Shared instances
 cache = None
@@ -84,14 +92,45 @@ app.add_middleware(
 )
 
 # Serve dashboard static files
-app.mount("/css", StaticFiles(directory=os.path.join(ADDIN_DIR, "css")), name="css")
-app.mount("/js", StaticFiles(directory=os.path.join(ADDIN_DIR, "js")), name="js")
+dashboard_css_dir = os.path.join(DASHBOARD_DIR, "css")
+dashboard_js_dir = os.path.join(DASHBOARD_DIR, "js")
+if os.path.isdir(dashboard_css_dir):
+    app.mount("/css", StaticFiles(directory=dashboard_css_dir), name="css")
+if os.path.isdir(dashboard_js_dir):
+    app.mount("/js", StaticFiles(directory=dashboard_js_dir), name="js")
 
 
 @app.get("/")
+async def serve_landing():
+    """Serve the main landing HTML."""
+    if os.path.exists(LANDING_PATH):
+        return FileResponse(LANDING_PATH)
+    return FileResponse(DASHBOARD_PATH)
+
+
+@app.get("/dashboard")
+@app.get("/dashboard/")
+@app.get("/dashboard/index.html")
 async def serve_dashboard():
-    """Serve the main dashboard HTML."""
-    return FileResponse(os.path.join(ADDIN_DIR, "index.html"))
+    """Serve the dashboard HTML."""
+    return FileResponse(DASHBOARD_PATH)
+
+
+@app.get("/icon.svg")
+@app.get("/dashboard/icon.svg")
+async def serve_icon():
+    """Serve app icon for favicon and UI."""
+    if os.path.exists(DASHBOARD_ICON_PATH):
+        return FileResponse(DASHBOARD_ICON_PATH)
+    raise HTTPException(status_code=404, detail="Icon not found")
+
+
+@app.get("/favicon.ico")
+async def serve_favicon():
+    """Serve favicon path used by browsers."""
+    if os.path.exists(DASHBOARD_ICON_PATH):
+        return FileResponse(DASHBOARD_ICON_PATH)
+    raise HTTPException(status_code=404, detail="Favicon not found")
 
 
 # === Request Models ===
@@ -103,7 +142,7 @@ class CommentaryRequest(BaseModel):
 
 class TTSRequest(BaseModel):
     text: str
-    voice: str = "en-US-Journey-F"
+    voice: str = "en-US-Journey-D"
 
 class GroupRequest(BaseModel):
     name: str
@@ -116,6 +155,12 @@ class AceQueryRequest(BaseModel):
 class ReportRequest(BaseModel):
     entity_id: str
     report_type: str = "incident"  # "incident" or "coaching"
+
+class SendMailRequest(BaseModel):
+    email: str
+    summary_text: str = ""
+    audio_b64: str | None = None
+    include_overview: bool = True
 
 # === Endpoints ===
 
@@ -200,7 +245,7 @@ import re as _re
 import base64 as _b64
 import asyncio as _asyncio
 
-async def _synthesize_to_b64(text: str, voice: str = "en-US-Journey-F") -> str | None:
+async def _synthesize_to_b64(text: str, voice: str = "en-US-Journey-D") -> str | None:
     """Return base64-encoded MP3 audio or None on failure."""
     api_key = os.getenv("GOOGLE_TTS_API_KEY") or os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -235,7 +280,7 @@ async def _synthesize_to_b64(text: str, voice: str = "en-US-Journey-F") -> str |
             payload,
         )
         if not resp.ok and is_journey:
-            payload["voice"]["name"] = f"{lang_code}-Neural2-F"
+            payload["voice"]["name"] = f"{lang_code}-Neural2-D"
             payload["audioConfig"].pop("effectsProfileId", None)
             resp = await _asyncio.to_thread(
                 _post,
@@ -392,6 +437,88 @@ async def create_group_endpoint(req: GroupRequest):
             "name": req.name,
             "vehicles_assigned": len(req.vehicle_ids),
         }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/send-mail")
+async def send_mail(req: SendMailRequest):
+    """Send manager overview email with optional audio summary attachment."""
+    if "@" not in req.email:
+        raise HTTPException(status_code=400, detail="Invalid email address")
+
+    try:
+        rankings = dna.rank_fleet()
+        events_result = geotab.get_live_events()
+        positions = geotab.get_live_positions()
+        anomalies = [r for r in rankings if r.get("deviation_score", 0) > 40]
+
+        fleet_summary = {
+            "total_vehicles": len(positions),
+            "anomaly_count": len(anomalies),
+            "event_count": len(events_result.get("events", [])),
+            "anomalies": anomalies[:5],
+            "top_rankings": rankings[:5],
+        }
+
+        overview = ""
+        if req.include_overview:
+            fleet_data = {
+                "rankings": rankings[:10],
+                "events": events_result.get("events", [])[:10],
+                "anomalies": anomalies[:10],
+            }
+            overview = await _asyncio.to_thread(generate_manager_brief, fleet_data, llm)
+
+        primary_text = overview or req.summary_text or "No summary available."
+        email_html = generate_manager_email_html(primary_text, fleet_summary)
+
+        if req.summary_text:
+            safe_summary = _html.escape(req.summary_text).replace("\n", "<br>")
+            email_html += f"""
+            <div style=\"max-width: 600px; margin: 12px auto 0; background: #161B22; color: #E6EDF3;
+                 border: 1px solid #30363D; border-radius: 12px; padding: 16px;\">
+                <h3 style=\"margin: 0 0 8px; font-size: 14px; color: #7D8590; text-transform: uppercase;\">Audio Broadcast Summary</h3>
+                <div style=\"font-size: 14px; line-height: 1.6;\">{safe_summary}</div>
+            </div>
+            """
+
+        attachment_path = None
+        if req.audio_b64:
+            try:
+                import hashlib
+                audio_bytes = _b64.b64decode(req.audio_b64)
+                os.makedirs(os.path.join(BASE_DIR, "audio"), exist_ok=True)
+                file_name = f"manager_brief_{hashlib.sha256(audio_bytes).hexdigest()[:12]}.mp3"
+                attachment_path = os.path.join(BASE_DIR, "audio", file_name)
+                with open(attachment_path, "wb") as audio_file:
+                    audio_file.write(audio_bytes)
+            except Exception as audio_err:
+                logger.warning(f"Failed to decode audio attachment: {audio_err}")
+
+        from datetime import datetime as _dt
+        subject = f"📡 GEOPulse Overview — {_dt.now().strftime('%A, %B %d')}"
+        result = await _asyncio.to_thread(
+            send_email,
+            req.email,
+            subject,
+            email_html,
+            "GEOPulse",
+            attachment_path,
+        )
+
+        if not result.get("success"):
+            raise HTTPException(status_code=500, detail=result.get("error", "Email send failed"))
+
+        return {
+            "success": True,
+            "email": req.email,
+            "message_id": result.get("message_id"),
+            "included_overview": bool(overview),
+            "included_audio": bool(attachment_path),
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
