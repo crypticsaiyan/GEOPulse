@@ -261,6 +261,7 @@ async def _synthesize_to_b64(text: str, voice: str = "en-US-Journey-D") -> str |
         return None
     try:
         import requests as _req_inner
+        from requests import exceptions as _req_exc
         clean = _re.sub(r'\*+|#+|`+|_{2,}|~+', '', text)
         clean = _re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', clean)
         clean = _re.sub(r'\s+', ' ', clean).strip()
@@ -279,25 +280,51 @@ async def _synthesize_to_b64(text: str, voice: str = "en-US-Journey-D") -> str |
         }
         is_journey = "Journey" in voice
         api_version = "v1beta1" if is_journey else "v1"
+        connect_timeout = float(os.getenv("TTS_CONNECT_TIMEOUT", "5"))
+        read_timeout = float(os.getenv("TTS_READ_TIMEOUT", "35"))
+        retries = max(1, int(os.getenv("TTS_RETRIES", "3")))
+        backoff_seconds = float(os.getenv("TTS_RETRY_BACKOFF", "1.2"))
 
-        def _post(url, body):
-            return _req_inner.post(url, json=body, timeout=20)  # Journey can take up to 15s
+        def _post_once(url, body):
+            return _req_inner.post(url, json=body, timeout=(connect_timeout, read_timeout))
 
-        resp = await _asyncio.to_thread(
-            _post,
+        async def _post_with_retry(url, body):
+            last_error = None
+            for attempt in range(1, retries + 1):
+                try:
+                    return await _asyncio.to_thread(_post_once, url, body)
+                except (_req_exc.ReadTimeout, _req_exc.ConnectTimeout, _req_exc.ConnectionError) as exc:
+                    last_error = exc
+                    if attempt >= retries:
+                        break
+                    await _asyncio.sleep(backoff_seconds * attempt)
+            if last_error:
+                raise last_error
+            raise RuntimeError("TTS request failed without response")
+
+        resp = await _post_with_retry(
             f"https://texttospeech.googleapis.com/{api_version}/text:synthesize?key={api_key}",
             payload,
         )
-        if not resp.ok and is_journey:
+
+        should_fallback_to_neural2 = (
+            (not resp.ok and is_journey)
+            or (resp.ok and not resp.json().get("audioContent") and is_journey)
+        )
+
+        if should_fallback_to_neural2:
             payload["voice"]["name"] = f"{lang_code}-Neural2-D"
             payload["audioConfig"].pop("effectsProfileId", None)
-            resp = await _asyncio.to_thread(
-                _post,
+            resp = await _post_with_retry(
                 f"https://texttospeech.googleapis.com/v1/text:synthesize?key={api_key}",
                 payload,
             )
+
         resp.raise_for_status()
         return resp.json().get("audioContent")  # already base64
+    except _req_inner.exceptions.ReadTimeout as e:
+        logger.warning(f"TTS synthesis timed out after retries: {e}")
+        return None
     except Exception as e:
         logger.warning(f"TTS synthesis failed: {e}")
         return None
